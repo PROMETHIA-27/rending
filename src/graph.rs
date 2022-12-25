@@ -152,82 +152,42 @@ impl RenderGraph {
             }
         }
 
-        // Detect ambiguities
-        let mut writes: BTreeMap<Cow<'static, str>, Vec<usize>> = BTreeMap::new();
-        for (key, node) in self.nodes.iter_key_value() {
-            for (write, _) in node.writes.iter() {
-                let nodes = match writes.get_mut(&write[..]) {
-                    Some(nodes) => nodes,
-                    None => {
-                        writes.insert(write.clone(), vec![]);
-                        writes.get_mut(&write[..]).unwrap()
+        // # Detect ambiguities
+        // Traverse the graph and build up bitsets of all dependencies
+        let mut stack = vec![];
+        let all_dependencies: Vec<Bitset> = (0..queue.len())
+            .into_iter()
+            .map(|index| {
+                let mut bitset = Bitset::new(queue.len());
+                stack.push(index);
+                while let Some(next) = stack.pop() {
+                    if bitset.contains(next).unwrap() {
+                        continue;
                     }
-                };
-
-                nodes.push(queue_indices[key]);
-            }
-        }
-
-        println!("Writes: {writes:#?}");
-
-        let mut relations: Vec<Option<Bitset>> =
-            std::iter::repeat(None).take(queue.len()).collect();
-
-        fn relations_contains(
-            relations: &mut [Option<Bitset>],
-            dependencies: &SecondaryMap<NodeKey, Vec<NodeKey>>,
-            queue: &[NodeKey],
-            queue_indices: &SecondaryMap<NodeKey, usize>,
-            left: usize,
-            right: usize,
-        ) -> bool {
-            match &relations[left] {
-                Some(bitset) => bitset.contains(right).unwrap(),
-                None => {
-                    let mut bitset = Bitset::new(relations.len());
-                    let left_key = queue[left];
-
-                    // TODO: Pool this (and maybe refactor this whole function)
-                    let mut stack = vec![left_key];
-                    while let Some(key) = stack.pop() {
-                        for &dependency in dependencies.get(key).unwrap() {
-                            let &dep_index = queue_indices.get(dependency).unwrap();
-                            if !bitset.contains(dep_index).unwrap() {
-                                bitset.insert(dep_index).unwrap();
-                                stack.push(dependency);
-                            }
-                        }
+                    bitset.insert(next).unwrap();
+                    for &dep in &dependencies[queue[next]] {
+                        stack.push(queue_indices[dep]);
                     }
-
-                    relations[left] = Some(bitset);
-                    relations[left].as_ref().unwrap().contains(right).unwrap()
                 }
-            }
-        }
+                bitset
+            })
+            .collect();
 
         let mut ambiguities = vec![];
+        for index_a in 0..queue.len() {
+            for index_b in all_dependencies[index_a].inverted().iter() {
+                if !all_dependencies[index_b].contains(index_a).unwrap() {
+                    let (a, b) = (
+                        self.nodes.get(queue[index_a]).unwrap(),
+                        self.nodes.get(queue[index_b]).unwrap(),
+                    );
 
-        for (_, writers) in writes.iter() {
-            for (&left, &right) in (&writers[..]).iter_combinations() {
-                if !relations_contains(
-                    &mut relations[..],
-                    &dependencies,
-                    &queue,
-                    &queue_indices,
-                    left,
-                    right,
-                ) && !relations_contains(
-                    &mut relations[..],
-                    &dependencies,
-                    &queue,
-                    &queue_indices,
-                    right,
-                    left,
-                ) {
-                    ambiguities.push((
-                        self.nodes.get_name(queue[left]).unwrap().to_string(),
-                        self.nodes.get_name(queue[right]).unwrap().to_string(),
-                    ));
+                    if a.conflicts_with(b) {
+                        ambiguities.push((
+                            self.nodes.get_name(queue[index_a]).unwrap().to_string(),
+                            self.nodes.get_name(queue[index_b]).unwrap().to_string(),
+                        ))
+                    }
                 }
             }
         }
