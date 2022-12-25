@@ -43,7 +43,7 @@ impl Bitset {
 
         let word = self.words[index / 64];
         let bit = word & ((1 << 63) >> (index % 64));
-        Some(bit == 1)
+        Some(bit != 0)
     }
 
     pub fn insert(&mut self, index: usize) -> Result<(), ()> {
@@ -68,6 +68,22 @@ impl Bitset {
         Ok(())
     }
 
+    pub fn invert(&mut self) {
+        for i in 0..self.word_len() {
+            self.words[i] ^= !0;
+        }
+    }
+
+    pub fn inverted(&self) -> Bitset {
+        let mut new = self.clone();
+
+        for i in 0..new.word_len() {
+            new.words[i] ^= !0;
+        }
+
+        new
+    }
+
     pub fn union_with(&mut self, other: &Bitset) {
         if self.len < other.len {
             self.resize(other.len);
@@ -75,6 +91,16 @@ impl Bitset {
 
         for i in 0..self.word_len() {
             self.words[i] |= other.words[i];
+        }
+    }
+
+    pub fn difference_with(&mut self, other: &Bitset) {
+        if self.len < other.len {
+            self.resize(other.len)
+        }
+
+        for i in 0..self.word_len() {
+            self.words[i] &= !other.words[i];
         }
     }
 
@@ -114,16 +140,18 @@ impl Iterator for Iter<'_> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index == self.bitset.len {
-            return None;
+        loop {
+            match self.bitset.contains(self.index) {
+                Some(val) => {
+                    if val {
+                        self.index += 1;
+                        return Some(self.index - 1);
+                    }
+                }
+                None => return None,
+            }
+            self.index += 1;
         }
-        let val = if self.bitset.contains(self.index).unwrap() {
-            Some(self.index)
-        } else {
-            None
-        };
-        self.index += 1;
-        val
     }
 }
 
@@ -153,4 +181,21 @@ fn bitset_union() {
     x.union_with(&y);
 
     assert_eq!(&format!("{x:?}")[..], "Bitset { 01010011 }");
+}
+
+#[test]
+fn bitset_iter() {
+    let mut bitset = Bitset::new(8);
+    bitset.insert(0).unwrap();
+    bitset.insert(2).unwrap();
+    bitset.insert(5).unwrap();
+    bitset.insert(6).unwrap();
+    bitset.insert(7).unwrap();
+
+    let mut string = "".to_string();
+    for elem in bitset.iter() {
+        string.push_str(&elem.to_string()[..]);
+    }
+
+    assert_eq!(&string[..], "02567");
 }
