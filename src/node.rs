@@ -138,6 +138,8 @@ impl std::fmt::Debug for RenderNodeMeta {
         f.debug_struct("RenderNodeMeta")
             .field("inputs", &self.reads)
             .field("outputs", &self.writes)
+            .field("before", &self.before)
+            .field("after", &self.after)
             .field(
                 "run_fn",
                 &fn_name
@@ -146,5 +148,33 @@ impl std::fmt::Debug for RenderNodeMeta {
                     .unwrap_or("custom fn"),
             )
             .finish()
+    }
+}
+
+impl RenderNodeMeta {
+    pub fn conflicts_with(&self, other: &RenderNodeMeta) -> bool {
+        for read in self.reads.iter() {
+            if other.writes.contains_key(&read[..]) {
+                return true;
+            }
+        }
+        for (write, _) in self.writes.iter() {
+            if other.writes.contains_key(&write[..]) {
+                return true;
+            }
+        }
+
+        for read in other.reads.iter() {
+            if self.writes.contains_key(&read[..]) {
+                return true;
+            }
+        }
+        for (write, _) in other.writes.iter() {
+            if self.writes.contains_key(&write[..]) {
+                return true;
+            }
+        }
+
+        false
     }
 }
