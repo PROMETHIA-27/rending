@@ -1,0 +1,22 @@
+[package]
+name = "rending"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+arrayvec = "0.7.2"
+futures-lite = "1.12"
+naga = "0.10"
+slotmap = "1.0"
+thiserror = "1.0"
+wgpu-core = "0.14.0"
+
+[dependencies.smallvec]
+version = "1.10"
+features = ["union", "const_generics"]
+
+[dependencies.wgpu]
+version = "0.14"
+features = ["spirv"]
