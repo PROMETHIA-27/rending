@@ -4,10 +4,11 @@ use naga::{FastHashMap, FastHashSet};
 
 use crate::node::{NodeInput, NodeOutput};
 use crate::resources::{
-    BindGroupCache, BufferHandle, RenderResources, ResourceHandle, ResourceUse,
+    BindGroupCache, BindGroupLayouts, BufferHandle, ComputePipelines, DataResources,
+    PipelineLayouts, RenderResources, ResourceHandle, ResourceUse, VirtualBuffers,
 };
 
-pub use self::inout::{InOutBuffer, InputBuffer, OutputBuffer};
+pub use self::inout::{ReadBuffer, ReadWriteBuffer, WriteBuffer};
 pub(crate) use self::pass::{ComputePassCommand, ComputePassCommands};
 
 mod inout;
@@ -19,19 +20,27 @@ pub(crate) enum RenderCommand {
     ComputePass(Option<Cow<'static, str>>, Vec<ComputePassCommand>),
 }
 
-pub struct RenderCommands<'r> {
-    pub(crate) queue: Vec<RenderCommand>,
-    pub(crate) resources: &'r RenderResources,
-    pub(crate) bind_cache: BindGroupCache,
-    pub(crate) resource_meta: FastHashMap<ResourceHandle, ResourceUse>,
+pub(crate) struct RenderCommandResources<'r> {
+    pub data_resources: &'r DataResources,
+    pub virtual_buffers: &'r mut VirtualBuffers,
+    pub compute_pipelines: &'r ComputePipelines,
+    pub bind_group_layouts: &'r BindGroupLayouts,
+    pub pipeline_layouts: &'r PipelineLayouts,
 }
 
-impl<'r> RenderCommands<'r> {
+pub struct RenderCommands<'q, 'r> {
+    pub(crate) resources: RenderCommandResources<'r>,
+    pub(crate) queue: &'q mut Vec<RenderCommand>,
+    pub(crate) bind_cache: &'q mut BindGroupCache,
+    pub(crate) resource_meta: &'q mut FastHashMap<ResourceHandle, ResourceUse>,
+}
+
+impl<'q, 'r> RenderCommands<'q, 'r> {
     fn enqueue(&mut self, c: RenderCommand) {
         self.queue.push(c)
     }
 
-    pub fn write_buffer(&mut self, buffer: OutputBuffer, offset: u64, bytes: &[u8]) {
+    pub fn write_buffer(&mut self, buffer: WriteBuffer, offset: u64, bytes: &[u8]) {
         self.enqueue(RenderCommand::WriteBuffer(
             buffer.0,
             offset,
@@ -42,7 +51,7 @@ impl<'r> RenderCommands<'r> {
     pub fn compute_pass<'c>(
         &'c mut self,
         label: Option<impl Into<Cow<'static, str>>>,
-    ) -> ComputePassCommands<'c, 'r> {
+    ) -> ComputePassCommands<'c, 'q, 'r> {
         ComputePassCommands {
             commands: self,
             label: label.map(Into::into),
@@ -54,9 +63,9 @@ impl<'r> RenderCommands<'r> {
 
     pub fn copy_buffer_to_buffer(
         &mut self,
-        src: InputBuffer,
+        src: ReadBuffer,
         src_offset: u64,
-        dst: OutputBuffer,
+        dst: WriteBuffer,
         dst_offset: u64,
         size: u64,
     ) {

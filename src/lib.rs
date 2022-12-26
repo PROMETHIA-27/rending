@@ -10,8 +10,6 @@ use thiserror::Error;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use wgpu::{Adapter, BufferDescriptor, BufferUsages, Device, Instance, Label, MapMode, Queue};
 
-use crate::resources::Buffer;
-
 mod bitset;
 mod commands;
 mod graph;
@@ -108,12 +106,12 @@ impl RenderNode for ComputeLevels {
     fn writes() -> Vec<NodeOutput> {
         vec![
             // NodeOutput::buffer("levels"),
-            NodeOutput::buffer("ascii_buffer"),
+            NodeOutput::new("ascii_buffer"),
         ]
     }
 
     fn run(commands: &mut RenderCommands, res: &ResourceProvider) {
-        let ascii = res.output_buffer("ascii_buffer");
+        let ascii = res.write_buffer("ascii_buffer");
 
         commands.write_buffer(ascii, 0, &[0xDE, 0xAD, 0xBE, 0xEF]);
 
@@ -137,16 +135,16 @@ impl RenderNode for CopyToStaging {
     }
 
     fn writes() -> Vec<NodeOutput> {
-        vec![NodeOutput::buffer("staging")]
+        vec![NodeOutput::new("staging")]
     }
 
-    // fn after() -> Vec<Cow<'static, str>> {
-    //     vec![ComputeLevels::name()]
-    // }
+    fn after() -> Vec<Cow<'static, str>> {
+        vec![ComputeLevels::name()]
+    }
 
     fn run(commands: &mut RenderCommands, res: &ResourceProvider) {
-        let buffer = res.input_buffer("ascii_buffer");
-        let staging = res.output_buffer("staging");
+        let buffer = res.read_buffer("ascii_buffer");
+        let staging = res.write_buffer("staging");
         commands.copy_buffer_to_buffer(buffer, 0, staging, 0, 4);
     }
 }

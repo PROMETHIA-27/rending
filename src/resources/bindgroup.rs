@@ -65,7 +65,9 @@ impl BindGroupCache {
             let entries = bindings
                 .iter()
                 .map(|&(index, binding)| {
-                    let &meta = meta.get(&binding.handle()).expect("all bound resources should have meta associated");
+                    let &meta = meta
+                        .get(&binding.handle())
+                        .expect("all bound resources should have meta associated");
 
                     BindGroupEntry {
                         binding: index,
@@ -79,18 +81,14 @@ impl BindGroupCache {
                                 },
                                 ResourceUse::Buffer { .. },
                             ) => BindingResource::Buffer(BufferBinding {
-                                buffer: &resources
-                                    .buffers
-                                    .get(handle)
-                                    .expect(
-                                        "buffers should not be invalidated before bind group creation",
-                                    )
-                                    .wgpu,
+                                buffer: &resources.buffers.get(handle).expect(
+                                    "buffers should not be invalidated before bind group creation",
+                                ),
                                 offset,
                                 size,
                             }),
                             _ => panic!("resource use and resource type must match"),
-                        }
+                        },
                     }
                 })
                 .collect::<Vec<_>>();

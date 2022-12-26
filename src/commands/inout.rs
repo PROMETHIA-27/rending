@@ -1,7 +1,7 @@
 use crate::resources::BufferHandle;
 
-pub struct InputBuffer(pub(crate) BufferHandle);
+pub struct ReadBuffer(pub(crate) BufferHandle);
 
-pub struct OutputBuffer(pub(crate) BufferHandle);
+pub struct WriteBuffer(pub(crate) BufferHandle);
 
-pub struct InOutBuffer(pub(crate) BufferHandle);
+pub struct ReadWriteBuffer(pub(crate) BufferHandle);

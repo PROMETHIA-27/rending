@@ -23,6 +23,7 @@ impl<K: Key, V> NamedSlotMap<K, V> {
 
     pub fn insert(&mut self, name: impl Into<Cow<'static, str>>, value: V) -> K {
         let key = self.slotmap.insert(value);
+        // TODO: This is silently "working" in the case that something was already there
         self.names.insert(name.into(), key);
         key
     }

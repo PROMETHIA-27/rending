@@ -49,15 +49,15 @@ impl ComputePassCommand {
 
 type TempBindings = SmallVec<[(u32, ResourceBinding); 16]>;
 
-pub struct ComputePassCommands<'c, 'r> {
-    pub(crate) commands: &'c mut RenderCommands<'r>,
+pub struct ComputePassCommands<'c, 'q, 'r> {
+    pub(crate) commands: &'c mut RenderCommands<'q, 'r>,
     pub(crate) label: Option<Cow<'static, str>>,
     pub(crate) queue: Vec<ComputePassCommand>,
     pub(crate) pipeline: Option<ComputePipelineHandle>,
     pub(crate) bindings: [Option<TempBindings>; wgpu_core::MAX_BIND_GROUPS],
 }
 
-impl ComputePassCommands<'_, '_> {
+impl ComputePassCommands<'_, '_, '_> {
     fn enqueue(&mut self, c: ComputePassCommand) {
         self.queue.push(c)
     }
@@ -78,18 +78,6 @@ impl ComputePassCommands<'_, '_> {
     }
 
     pub fn dispatch(mut self, x: u32, y: u32, z: u32) -> Self {
-        let pipeline = self
-            .pipeline
-            .map(|handle| self.commands.resources.compute_pipelines.get(handle))
-            .expect("attempted to dispatch without a pipeline set")
-            .unwrap();
-        let layout = self
-            .commands
-            .resources
-            .pipeline_layouts
-            .get(pipeline.layout)
-            .unwrap();
-
         // Have to temporarily destruct to get around aliasing borrows
         let Self {
             commands,
@@ -98,6 +86,16 @@ impl ComputePassCommands<'_, '_> {
             pipeline,
             bindings,
         } = self;
+
+        let compute_pipeline = pipeline
+            .map(|handle| commands.resources.compute_pipelines.get(handle))
+            .expect("attempted to dispatch without a pipeline set")
+            .unwrap();
+        let layout = commands
+            .resources
+            .pipeline_layouts
+            .get(compute_pipeline.layout)
+            .unwrap();
 
         for (group_index, (binding, &group_layout)) in bindings
             .iter()

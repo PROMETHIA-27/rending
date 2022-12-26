@@ -107,12 +107,6 @@ impl BufferSlice {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct Buffer {
-    pub wgpu: wgpu::Buffer,
-    pub retained: bool,
-}
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BufferUse {
     Uniform,
@@ -130,4 +124,9 @@ impl BufferUse {
             _ => false,
         }
     }
+}
+
+#[derive(Debug)]
+pub(crate) struct VirtualBuffer {
+    pub retained: bool,
 }

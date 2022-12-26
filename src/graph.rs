@@ -7,12 +7,13 @@ use thiserror::Error;
 use wgpu::{Buffer, CommandEncoderDescriptor, ComputePassDescriptor};
 
 use crate::bitset::Bitset;
-use crate::commands::{ComputePassCommand, RenderCommand, RenderCommands};
+use crate::commands::{ComputePassCommand, RenderCommand, RenderCommandResources, RenderCommands};
 use crate::named_slotmap::NamedSlotMap;
 use crate::node::{NodeInput, NodeKey, NodeOutput, OrderingList, RenderNode, RenderNodeMeta};
 use crate::reflect::ReflectedComputePipeline;
 use crate::resources::{
-    BindGroupCache, BufferHandle, ComputePipelineHandle, RenderResources, ResourceProvider,
+    BindGroupCache, BufferHandle, ComputePipelineHandle, RenderResources, ResourceHandle,
+    ResourceProvider, VirtualBuffer,
 };
 use crate::util::IterCombinations;
 use crate::RenderContext;
@@ -59,7 +60,7 @@ impl RenderGraph {
                 .map(|input| input.resource)
                 .collect(),
             writes: Vec::into_iter(T::writes())
-                .map(|output| (output.resource, output.ty))
+                .map(|output| output.resource)
                 .collect(),
             // Vec::into_iter is used over .into_iter so that this errors if I change the functions to not be Vec
             before: OrderingList::Names(Vec::into_iter(T::before()).collect()),
@@ -153,6 +154,7 @@ impl RenderGraph {
         }
 
         // # Detect ambiguities
+        // TODO: Make this optional since it's so expensive
         // Traverse the graph and build up bitsets of all dependencies
         let mut stack = vec![];
         let all_dependencies: Vec<Bitset> = (0..queue.len())
@@ -218,27 +220,18 @@ impl RenderGraph {
         name: impl Into<Cow<'static, str>>,
         buffer: Buffer,
     ) -> BufferHandle {
-        self.resources.insert_buffer(
-            name,
-            crate::Buffer {
-                wgpu: buffer,
-                retained: true,
-            },
-        )
+        self.resources.insert_buffer(name, buffer)
     }
 
     pub fn get_buffer(&self, handle: BufferHandle) -> Option<&Buffer> {
-        self.resources
-            .buffers
-            .get(handle)
-            .map(|buffer| &buffer.wgpu)
+        self.resources.buffers.get(handle)
     }
 
     pub fn get_buffer_named(&mut self, name: &str) -> Option<&Buffer> {
         self.resources
-            .buffers
-            .get_named(name)
-            .map(|buffer| &buffer.wgpu)
+            .virtual_buffers
+            .get_key(name)
+            .map(|handle| self.resources.buffers.get(handle).unwrap())
     }
 }
 
@@ -250,57 +243,72 @@ pub struct RenderGraphCompilation<'g> {
 
 impl RenderGraphCompilation<'_> {
     pub fn run(&mut self, ctx: RenderContext) -> Result<(), RenderGraphError> {
-        let mut commands = RenderCommands {
-            queue: vec![],
-            resources: self.resources,
-            bind_cache: BindGroupCache::new(),
-            resource_meta: FastHashMap::default(),
-        };
+        // TODO: Pool these bits
+        let queue = &mut vec![];
+        let bind_cache = &mut BindGroupCache::new();
+        let resource_meta = &mut FastHashMap::default();
 
         let mut provider = ResourceProvider::new();
 
-        for (name, pipeline) in commands.resources.compute_pipelines.iter_names() {
+        let RenderCommandResources {
+            data_resources,
+            virtual_buffers,
+            compute_pipelines,
+            bind_group_layouts,
+            pipeline_layouts,
+        } = self.resources.split_for_render();
+
+        for (name, pipeline) in compute_pipelines.iter_names() {
             provider.compute_pipelines.insert(name, pipeline);
         }
 
         for node in &self.nodes {
-            provider.in_buffers.clear();
-            provider.out_buffers.clear();
+            provider.buffer_reads.clear();
+            provider.buffer_writes.clear();
 
-            for (output, _) in &node.writes {
-                if !node.reads.contains(&output[..]) {
-                    // This is where transient resources are created
-                }
-
-                if let Some(buffer) = commands.resources.buffers.get_key(&output) {
-                    provider.out_buffers.insert(&output[..], buffer);
+            for read in &node.reads {
+                if let Some(&resource) = data_resources.get(&read[..]) {
+                    match resource {
+                        ResourceHandle::Buffer(handle) => {
+                            provider.buffer_reads.insert(&read[..], handle);
+                        }
+                    }
                 } else {
-                    return Err(RenderGraphError::MissingResource(output.to_string()));
+                    // There's no retained/previously instantiated transient resource, so create a transient
+                    provider.transient_reads.insert(&read[..]);
                 }
             }
 
-            for input in &node.reads {
-                if let Some(buffer) = commands.resources.buffers.get_key(&input) {
-                    provider.in_buffers.insert(&input[..], buffer);
+            for write in &node.writes {
+                if let Some(&resource) = data_resources.get(&write[..]) {
+                    match resource {
+                        ResourceHandle::Buffer(handle) => {
+                            provider.buffer_writes.insert(&write[..], handle);
+                        }
+                    }
                 } else {
-                    return Err(RenderGraphError::MissingResource(input.to_string()));
+                    provider.transient_writes.insert(&write[..]);
                 }
             }
+
+            let mut commands = RenderCommands {
+                resources: RenderCommandResources {
+                    data_resources,
+                    virtual_buffers,
+                    compute_pipelines,
+                    bind_group_layouts,
+                    pipeline_layouts,
+                },
+                queue,
+                bind_cache,
+                resource_meta,
+            };
 
             (node.run_fn)(&mut commands, &provider)
         }
 
-        let RenderCommands {
-            queue,
-            bind_cache,
-            resource_meta,
-            ..
-        } = commands;
-
         // Make bind groups
         bind_cache.create_groups(ctx, &mut self.resources, &resource_meta);
-
-        // Verify retained resources match their uses
 
         // Execute render command queue
         let mut encoder = ctx
@@ -310,7 +318,7 @@ impl RenderGraphCompilation<'_> {
             match command {
                 RenderCommand::WriteBuffer(handle, offset, data) => {
                     let buffer = self.resources.buffers.get(*handle).unwrap();
-                    ctx.queue.write_buffer(&buffer.wgpu, *offset, &data[..]);
+                    ctx.queue.write_buffer(&buffer, *offset, &data[..]);
                 }
                 RenderCommand::ComputePass(label, commands) => {
                     let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
@@ -337,7 +345,7 @@ impl RenderGraphCompilation<'_> {
                 &RenderCommand::CopyBufferToBuffer(src, src_off, dst, dst_off, size) => {
                     let src = self.resources.buffers.get(src).unwrap();
                     let dst = self.resources.buffers.get(dst).unwrap();
-                    encoder.copy_buffer_to_buffer(&src.wgpu, src_off, &dst.wgpu, dst_off, size);
+                    encoder.copy_buffer_to_buffer(&src, src_off, &dst, dst_off, size);
                 }
             }
         }

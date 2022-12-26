@@ -64,21 +64,12 @@ impl NodeInput {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NodeOutput {
     pub resource: Cow<'static, str>,
-    pub ty: ResourceType,
 }
 
 impl NodeOutput {
-    pub fn buffer(name: impl Into<Cow<'static, str>>) -> Self {
+    pub fn new(name: impl Into<Cow<'static, str>>) -> Self {
         Self {
             resource: name.into(),
-            ty: ResourceType::Buffer,
-        }
-    }
-
-    pub fn texture(name: impl Into<Cow<'static, str>>) -> Self {
-        Self {
-            resource: name.into(),
-            ty: ResourceType::Texture,
         }
     }
 }
@@ -122,7 +113,7 @@ impl OrderingList {
 #[derive(Clone)]
 pub struct RenderNodeMeta {
     pub(crate) reads: FastHashSet<Cow<'static, str>>,
-    pub(crate) writes: FastHashMap<Cow<'static, str>, ResourceType>,
+    pub(crate) writes: FastHashSet<Cow<'static, str>>,
     pub(crate) before: OrderingList,
     pub(crate) after: OrderingList,
     pub(crate) run_fn: fn(&mut RenderCommands, &ResourceProvider),
@@ -153,26 +144,18 @@ impl std::fmt::Debug for RenderNodeMeta {
 
 impl RenderNodeMeta {
     pub fn conflicts_with(&self, other: &RenderNodeMeta) -> bool {
-        for read in self.reads.iter() {
-            if other.writes.contains_key(&read[..]) {
-                return true;
-            }
+        if self.reads.union(&other.writes).next().is_some() {
+            return true;
         }
-        for (write, _) in self.writes.iter() {
-            if other.writes.contains_key(&write[..]) {
-                return true;
-            }
+        if self.writes.union(&other.writes).next().is_some() {
+            return true;
         }
 
-        for read in other.reads.iter() {
-            if self.writes.contains_key(&read[..]) {
-                return true;
-            }
+        if other.reads.union(&self.writes).next().is_some() {
+            return true;
         }
-        for (write, _) in other.writes.iter() {
-            if self.writes.contains_key(&write[..]) {
-                return true;
-            }
+        if other.writes.union(&self.writes).next().is_some() {
+            return true;
         }
 
         false

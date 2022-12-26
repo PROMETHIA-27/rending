@@ -1,16 +1,16 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use slotmap::{SecondaryMap, SlotMap};
-use wgpu::{BindGroup, BufferUsages};
+use wgpu::{BindGroup, Buffer, BufferUsages};
 
-use crate::commands::{InOutBuffer, InputBuffer, OutputBuffer};
+use crate::commands::{ReadBuffer, ReadWriteBuffer, RenderCommandResources, WriteBuffer};
 use crate::named_slotmap::NamedSlotMap;
 use crate::reflect::ReflectedComputePipeline;
 
 pub(crate) use self::bindgroup::{BindGroupCache, BindGroupHandle, ResourceBinding};
 pub use self::buffer::BufferHandle;
-pub(crate) use self::buffer::{Buffer, BufferUse};
+pub(crate) use self::buffer::{BufferUse, VirtualBuffer};
 pub use self::layout::BindGroupLayout;
 pub use self::layout::{BindGroupLayoutHandle, PipelineLayout, PipelineLayoutHandle};
 pub use self::module::ShaderModule;
@@ -22,22 +22,31 @@ mod layout;
 mod module;
 mod pipeline;
 
+// TODO: Finish aliasing all fields
+pub(crate) type DataResources = BTreeMap<Cow<'static, str>, ResourceHandle>;
+pub(crate) type VirtualBuffers = NamedSlotMap<BufferHandle, VirtualBuffer>;
+pub(crate) type ComputePipelines = NamedSlotMap<ComputePipelineHandle, ComputePipeline>;
+pub(crate) type BindGroupLayouts = SlotMap<BindGroupLayoutHandle, BindGroupLayout>;
+pub(crate) type PipelineLayouts = SlotMap<PipelineLayoutHandle, PipelineLayout>;
+
 #[derive(Debug)]
 pub(crate) struct RenderResources {
     // TODO: Consider whether resources should be stored in a different slotmap type. Probably not.
-    pub data_resources: BTreeMap<Cow<'static, str>, ResourceHandle>,
-    pub buffers: NamedSlotMap<BufferHandle, Buffer>,
-    pub compute_pipelines: NamedSlotMap<ComputePipelineHandle, ComputePipeline>,
+    pub data_resources: DataResources,
+    pub virtual_buffers: VirtualBuffers,
+    pub buffers: SecondaryMap<BufferHandle, Buffer>,
+    pub compute_pipelines: ComputePipelines,
     pub bind_groups: SecondaryMap<BindGroupHandle, BindGroup>,
-    pub bind_group_layouts: SlotMap<BindGroupLayoutHandle, BindGroupLayout>,
-    pub pipeline_layouts: SlotMap<PipelineLayoutHandle, PipelineLayout>,
+    pub bind_group_layouts: BindGroupLayouts,
+    pub pipeline_layouts: PipelineLayouts,
 }
 
 impl RenderResources {
     pub fn new() -> Self {
         Self {
             data_resources: BTreeMap::new(),
-            buffers: NamedSlotMap::new(),
+            virtual_buffers: NamedSlotMap::new(),
+            buffers: SecondaryMap::new(),
             compute_pipelines: NamedSlotMap::new(),
             bind_groups: SecondaryMap::new(),
             bind_group_layouts: SlotMap::with_key(),
@@ -51,7 +60,10 @@ impl RenderResources {
         buffer: Buffer,
     ) -> BufferHandle {
         let name: Cow<str> = name.into();
-        let handle = self.buffers.insert(name.clone(), buffer);
+        let handle = self
+            .virtual_buffers
+            .insert(name.clone(), VirtualBuffer { retained: true });
+        self.buffers.insert(handle, buffer);
         self.data_resources
             .insert(name, ResourceHandle::Buffer(handle));
         handle
@@ -89,6 +101,16 @@ impl RenderResources {
             },
         )
     }
+
+    pub fn split_for_render(&mut self) -> RenderCommandResources {
+        RenderCommandResources {
+            data_resources: &self.data_resources,
+            virtual_buffers: &mut self.virtual_buffers,
+            compute_pipelines: &self.compute_pipelines,
+            bind_group_layouts: &self.bind_group_layouts,
+            pipeline_layouts: &self.pipeline_layouts,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -110,46 +132,70 @@ impl From<BufferHandle> for ResourceHandle {
 
 #[derive(Debug)]
 pub struct ResourceProvider<'s> {
-    pub(crate) in_buffers: BTreeMap<&'s str, BufferHandle>,
-    pub(crate) out_buffers: BTreeMap<&'s str, BufferHandle>,
+    pub(crate) transient_reads: BTreeSet<&'s str>,
+    pub(crate) transient_writes: BTreeSet<&'s str>,
+    pub(crate) buffer_reads: BTreeMap<&'s str, BufferHandle>,
+    pub(crate) buffer_writes: BTreeMap<&'s str, BufferHandle>,
     pub(crate) compute_pipelines: BTreeMap<&'s str, ComputePipelineHandle>,
+    pub(crate) virtual_buffers: &'s mut VirtualBuffers,
 }
 
 impl ResourceProvider<'_> {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(virtual_buffers: &mut VirtualBuffers) -> Self {
         Self {
-            in_buffers: BTreeMap::new(),
-            out_buffers: BTreeMap::new(),
+            transient_reads: BTreeSet::new(),
+            transient_writes: BTreeSet::new(),
+            buffer_reads: BTreeMap::new(),
+            buffer_writes: BTreeMap::new(),
             compute_pipelines: BTreeMap::new(),
+            virtual_buffers,
         }
     }
 
-    pub fn input_buffer(&self, name: &str) -> InputBuffer {
-        InputBuffer(
-            self.in_buffers
+    pub fn read_buffer(&mut self, name: &str) -> ReadBuffer {
+        ReadBuffer(
+            self.buffer_reads
                 .get(name)
                 .copied()
+                .or_else(|| {
+                    self.transient_reads.contains(name).then(|| {
+                        let handle = self
+                            .virtual_buffers
+                            .insert(name, VirtualBuffer { retained: false });
+                        self.buffer_reads.insert(name, handle);
+                        handle
+                    })
+                })
                 .unwrap_or_else(|| panic!("no buffer named `{name}` available")),
         )
     }
 
-    pub fn output_buffer(&self, name: &str) -> OutputBuffer {
-        OutputBuffer(
-            self.out_buffers
+    pub fn write_buffer(&mut self, name: &str) -> WriteBuffer {
+        WriteBuffer(
+            self.buffer_writes
                 .get(name)
                 .copied()
+                .or_else(|| {
+                    self.transient_writes.contains(name).then(|| {
+                        let handle = self
+                            .virtual_buffers
+                            .insert(name, VirtualBuffer { retained: false });
+                        self.buffer_writes.insert(name, handle);
+                        handle
+                    })
+                })
                 .unwrap_or_else(|| panic!("no buffer named `{name}` available")),
         )
     }
 
-    pub fn inout_buffer(&self, name: &str) -> InOutBuffer {
+    pub fn readwrite_buffer(&mut self, name: &str) -> ReadWriteBuffer {
         let &buffer = self
-            .in_buffers
+            .buffer_reads
             .contains_key(name)
-            .then(|| self.out_buffers.get(name))
+            .then(|| self.buffer_writes.get(name))
             .flatten()
             .unwrap_or_else(|| panic!("no inout buffer named {name} available"));
-        InOutBuffer(buffer)
+        ReadWriteBuffer(buffer)
     }
 
     pub fn compute_pipeline(&self, name: &str) -> ComputePipelineHandle {
