@@ -187,7 +187,6 @@ impl RenderGraph {
 
         // # Detect ambiguities
         // TODO: Make this optional since it's so expensive
-        // TODO: Either move this to run stage or move node runs to compile stage
         // Traverse the graph and build up bitsets of all dependencies
         let mut stack = vec![];
         let all_dependencies: Vec<Bitset> = (0..nodes.len())
