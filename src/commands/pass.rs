@@ -82,6 +82,7 @@ impl ComputePassCommands<'_, '_, '_> {
                 .unwrap();
 
             // TODO: Test that input buffers can only be read from and output can only be written to now
+            // TODO: Figure out what the above todo means i forgor :(
             for &(binding, resource) in binding.iter() {
                 let uses = commands
                     .resource_meta
@@ -89,37 +90,54 @@ impl ComputePassCommands<'_, '_, '_> {
                     .or_insert_with(|| ResourceUse::default_from_handle(resource.handle()));
                 let entry = group_layout.entries[binding as usize];
 
-                match entry.ty {
-                    wgpu::BindingType::Buffer { ty, .. } => match ty {
-                        wgpu::BufferBindingType::Uniform => {
-                            assert!(
-                                resource.buffer_use().matches_use(BufferUse::Uniform), 
-                                "buffer bound to uniform slot must be passed as a uniform; try using `.uniform()` on a `BufferSlice`"
-                            );
-                            uses.set_uniform_buffer();
+                match (resource, entry.ty) {
+                    (
+                        ResourceBinding::Buffer { handle, offset, size, usage },
+                        wgpu::BindingType::Buffer { ty, has_dynamic_offset, min_binding_size }
+                    ) => {
+                        let binding_size = size.map(u64::from);
+                        let min_binding_size = min_binding_size.map(u64::from);
+                        match (binding_size, min_binding_size) {
+                            (Some(binding), Some(min)) => {
+                                assert!(
+                                    binding >= min, 
+                                    "attempted to bind {binding} buffer bytes 
+                                    when the minimum binding size was {min} at 
+                                    binding slot {{ {group_index}, {binding} }}"
+                                );
+                                uses.set_buffer_size(binding + offset);
+                            }
+                            (Some(binding), None) => {
+                                uses.set_buffer_size(binding + offset);
+                            },
+                            (None, Some(min)) => {
+                                uses.set_buffer_size(min + offset);
+                            }
+                            (None, None) => (), // TODO: Might be a better way to handle this case,
+                            // since right now it'll probably break if no other usage makes the buffer large enough
                         }
-                        wgpu::BufferBindingType::Storage { read_only } => {
-                            assert!(
-                                resource.buffer_use().matches_use(BufferUse::Storage(match read_only {
-                                    true => RWMode::READ,
-                                    false => RWMode::READWRITE,
-                                })), 
-                                "buffer bound to storage slot must be passed as a storage with the same ReadWrite access mode; try using `.storage()` on a `BufferSlice`, and ensure both have the same access mode"
-                            );
-                            uses.set_storage_buffer();
+
+                        match ty {
+                            wgpu::BufferBindingType::Uniform => {
+                                assert!(
+                                    resource.buffer_use().matches_use(BufferUse::Uniform), 
+                                    "buffer bound to uniform slot must be passed as a uniform; try using `.uniform()` on a `BufferSlice`"
+                                );
+                                uses.set_uniform_buffer();
+                            }
+                            wgpu::BufferBindingType::Storage { read_only } => {
+                                assert!(
+                                    resource.buffer_use().matches_use(BufferUse::Storage(match read_only {
+                                        true => RWMode::READ,
+                                        false => RWMode::READWRITE,
+                                    })), 
+                                    "buffer bound to storage slot must be passed as a storage with the same ReadWrite access mode; try using `.storage()` on a `BufferSlice`, and ensure both have the same access mode"
+                                );
+                                uses.set_storage_buffer();
+                            }
                         }
                     },
-                    wgpu::BindingType::Sampler(_) => todo!(),
-                    wgpu::BindingType::Texture {
-                        sample_type,
-                        view_dimension,
-                        multisampled,
-                    } => todo!(),
-                    wgpu::BindingType::StorageTexture {
-                        access,
-                        format,
-                        view_dimension,
-                    } => todo!(),
+                    _ => todo!(),
                 }
             }
             queue.push(ComputePassCommand::BindGroup(group_index as u32, handle));
