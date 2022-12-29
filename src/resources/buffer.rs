@@ -1,7 +1,8 @@
 use std::num::NonZeroU64;
 use std::ops::RangeBounds;
 
-use slotmap::new_key_type;
+use slotmap::{new_key_type, SecondaryMap};
+use wgpu::Buffer;
 
 use super::{RWMode, ResourceBinding};
 
@@ -127,3 +128,19 @@ impl BufferUse {
 
 #[derive(Debug)]
 pub(crate) struct VirtualBuffer;
+
+pub(crate) enum BufferBinding<'b> {
+    Retained(&'b Buffer),
+    Transient(Buffer),
+}
+
+impl<'b> AsRef<Buffer> for BufferBinding<'b> {
+    fn as_ref(&self) -> &Buffer {
+        match self {
+            BufferBinding::Retained(buffer) => buffer,
+            BufferBinding::Transient(buffer) => buffer,
+        }
+    }
+}
+
+pub(crate) type BufferBindings<'b> = SecondaryMap<BufferHandle, BufferBinding<'b>>;

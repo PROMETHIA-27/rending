@@ -1,16 +1,16 @@
 use naga::{FastHashMap, FastHashSet};
 use slotmap::SecondaryMap;
 use thiserror::Error;
-use wgpu::{Buffer, CommandEncoderDescriptor, ComputePassDescriptor};
+use wgpu::{BufferDescriptor, CommandEncoderDescriptor, ComputePassDescriptor};
 
 use crate::bitset::Bitset;
 use crate::commands::{ComputePassCommand, RenderCommand, RenderCommands};
 use crate::named_slotmap::NamedSlotMap;
 use crate::node::{NodeKey, OrderingList, RenderNode, RenderNodeMeta};
 use crate::resources::{
-    BindGroupCache, BufferHandle, NodeResourceAccess, PipelineStorage, RenderResources,
-    ResourceAccesses, ResourceHandle, ResourceList, ResourceRev, ResourceUse, Resources,
-    VirtualBuffers,
+    BindGroupCache, BufferBinding, BufferBindings, NodeResourceAccess, PipelineStorage,
+    RenderResources, ResourceAccesses, ResourceHandle, ResourceList, ResourceRev, ResourceUse,
+    Resources, VirtualBuffers,
 };
 use crate::RenderContext;
 
@@ -31,7 +31,6 @@ pub enum RenderGraphError {
 pub struct RenderGraph {
     // TODO: Store nodes in a NamedDenseSlotMap
     nodes: NamedSlotMap<NodeKey, RenderNodeMeta>,
-    pipelines: PipelineStorage,
 }
 
 // TODO: What is the lifetime of bind groups?
@@ -39,32 +38,25 @@ impl RenderGraph {
     pub fn new() -> Self {
         Self {
             nodes: NamedSlotMap::new(),
-            pipelines: PipelineStorage::new(),
         }
     }
 
     pub fn add_node<T: RenderNode>(&mut self) {
-        let (reads, writes, run_fn, type_name) = (
-            T::reads(),
-            T::writes(),
-            T::run,
-            Some(std::any::type_name::<T>()),
-        );
-
         let meta = RenderNodeMeta {
             // Vec::into_iter is used over .into_iter so that this errors if I change the functions to not be Vec
             before: OrderingList::Names(Vec::into_iter(T::before()).collect()),
             after: OrderingList::Names(Vec::into_iter(T::after()).collect()),
-            run_fn,
-            type_name,
+            run_fn: T::run,
+            type_name: Some(std::any::type_name::<T>()),
         };
 
         self.nodes.insert(T::name(), meta);
     }
 
-    pub fn compile(
-        &mut self,
+    pub fn compile<'g>(
+        &'g mut self,
         ctx: RenderContext,
+        pipelines: &'g PipelineStorage,
     ) -> Result<RenderGraphCompilation, RenderGraphError> {
         // Map of { dependent: dependencies }
         // TODO: Pool this
@@ -152,7 +144,7 @@ impl RenderGraph {
                 std::iter::repeat(NodeResourceAccess::new()).take(self.nodes.len()),
             ),
             virtual_buffers: VirtualBuffers::new(),
-            compute_pipelines: &self.pipelines.compute_pipelines,
+            compute_pipelines: &pipelines.compute_pipelines,
         };
 
         // TODO: Pool these bits
@@ -168,7 +160,7 @@ impl RenderGraph {
             resources.node_index = index;
 
             let mut commands = RenderCommands {
-                pipelines: &self.pipelines,
+                pipelines: &pipelines,
                 queue: &mut queue,
                 bind_cache: &mut bind_cache,
                 resource_meta: &mut resource_meta,
@@ -219,6 +211,7 @@ impl RenderGraph {
 
         Ok(RenderGraphCompilation {
             graph: self,
+            pipelines,
             queue,
             bind_cache,
             resource_meta,
@@ -230,6 +223,7 @@ impl RenderGraph {
 #[derive(Debug)]
 pub struct RenderGraphCompilation<'g> {
     graph: &'g RenderGraph,
+    pipelines: &'g PipelineStorage,
     queue: Vec<RenderCommand>,
     bind_cache: BindGroupCache,
     resource_meta: FastHashMap<ResourceHandle, ResourceUse>,
@@ -240,21 +234,42 @@ impl RenderGraphCompilation<'_> {
     pub fn run(
         &mut self,
         ctx: RenderContext,
-        res: &mut RenderResources,
+        res: &RenderResources,
     ) -> Result<(), RenderGraphError> {
-        // Bind retained resources
-        let bound_buffers: SecondaryMap<BufferHandle, &Buffer> = self
+        let bound_buffers: BufferBindings = self
             .virtual_buffers
             .iter_names()
-            .filter_map(|(name, handle)| res.buffers.get(name).map(|buf| (handle, buf)))
+            .map(|(name, handle)| {
+                // Bind retained resources
+                // TODO: Verify they match their usage
+                if let Some(buf) = res.buffers.get(name) {
+                    (handle, BufferBinding::Retained(buf))
+                }
+                // Create transients
+                else {
+                    let meta = self.resource_meta[&ResourceHandle::Buffer(handle)];
+                    let (size, usage, mapped) = match meta {
+                        ResourceUse::Buffer {
+                            size,
+                            usage,
+                            mapped,
+                        } => (size, usage, mapped),
+                    };
+                    let buffer = ctx.device.create_buffer(&BufferDescriptor {
+                        label: None,
+                        size,
+                        usage,
+                        mapped_at_creation: mapped,
+                    });
+                    (handle, BufferBinding::Transient(buffer))
+                }
+            })
             .collect();
-
-        // Create transients
 
         // Make bind groups
         let bind_groups = self.bind_cache.create_groups(
             ctx,
-            &self.graph.pipelines,
+            &self.pipelines,
             res,
             &bound_buffers,
             &self.resource_meta,
@@ -267,7 +282,7 @@ impl RenderGraphCompilation<'_> {
         for command in self.queue.iter() {
             match command {
                 RenderCommand::WriteBuffer(handle, offset, data) => {
-                    let buffer = bound_buffers.get(*handle).unwrap();
+                    let buffer = bound_buffers.get(*handle).unwrap().as_ref();
                     ctx.queue.write_buffer(&buffer, *offset, &data[..]);
                 }
                 RenderCommand::ComputePass(label, commands) => {
@@ -278,7 +293,7 @@ impl RenderGraphCompilation<'_> {
                         match command {
                             ComputePassCommand::SetPipeline(handle) => {
                                 let pipeline =
-                                    self.graph.pipelines.compute_pipelines.get(*handle).unwrap();
+                                    self.pipelines.compute_pipelines.get(*handle).unwrap();
                                 pass.set_pipeline(&pipeline.wgpu);
                             }
                             ComputePassCommand::BindGroup(index, handle) => {
@@ -293,8 +308,8 @@ impl RenderGraphCompilation<'_> {
                     }
                 }
                 &RenderCommand::CopyBufferToBuffer(src, src_off, dst, dst_off, size) => {
-                    let src = bound_buffers.get(src).unwrap();
-                    let dst = bound_buffers.get(dst).unwrap();
+                    let src = bound_buffers.get(src).unwrap().as_ref();
+                    let dst = bound_buffers.get(dst).unwrap().as_ref();
                     encoder.copy_buffer_to_buffer(&src, src_off, &dst, dst_off, size);
                 }
             }
