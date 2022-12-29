@@ -4,10 +4,10 @@ use std::path::Path;
 use std::string::FromUtf8Error;
 
 use naga::front::spv::Options as SpvOptions;
-use naga::valid::{Capabilities, GlobalUse, ValidationError, ValidationFlags};
+use naga::valid::{Capabilities, ValidationError, ValidationFlags};
 use naga::{
-    AddressSpace, FastHashSet, GlobalVariable, Handle, ImageClass, ImageDimension, ShaderStage,
-    StorageAccess, StorageFormat, TypeInner, WithSpan,
+    AddressSpace, FastHashSet, ImageClass, ImageDimension, ShaderStage, StorageAccess,
+    StorageFormat, TypeInner, WithSpan,
 };
 use thiserror::Error;
 use wgpu::{

@@ -1,11 +1,9 @@
 use std::borrow::Cow;
 
-use naga::{FastHashMap, FastHashSet};
+use naga::FastHashMap;
 
-use crate::node::{NodeInput, NodeOutput};
 use crate::resources::{
-    BindGroupCache, BufferHandle, DataResources, PipelineStorage, RenderResources, ResourceHandle,
-    ResourceUse, VirtualBuffers,
+    BindGroupCache, BufferHandle, PipelineStorage, ResourceHandle, ResourceUse,
 };
 
 pub use self::inout::{ReadBuffer, ReadWriteBuffer, WriteBuffer};
