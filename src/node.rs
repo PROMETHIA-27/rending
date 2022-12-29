@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 
-use naga::{FastHashMap, FastHashSet};
+use naga::FastHashSet;
 use slotmap::new_key_type;
 
 use crate::commands::RenderCommands;
-use crate::resources::{ResourceType, Resources};
+use crate::resources::Resources;
 
 new_key_type! { pub struct NodeKey; }
 
