@@ -152,7 +152,7 @@ fn test() {
     let (device, queue) = futures_lite::future::block_on(adapter.request_device(
         &DeviceDescriptor {
             label: Some("RenderDevice"),
-            features: Features::TEXTURE_BINDING_ARRAY,
+            features: Features::default(),
             limits: Limits::default(),
         },
         None,
@@ -161,15 +161,9 @@ fn test() {
 
     let ctx = RenderContext::new(&instance, &adapter, &device, &queue);
 
-    let ascii_buffer = ctx.device.create_buffer(&BufferDescriptor {
-        label: None,
-        size: 16,
-        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
     let staging = ctx.device.create_buffer(&BufferDescriptor {
         label: None,
-        size: 16,
+        size: 4,
         usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -187,14 +181,17 @@ fn test() {
     graph.add_node::<CopyToStaging>();
 
     let mut resources = RenderResources::new();
-    resources.insert_buffer("ascii_buffer", ascii_buffer);
     resources.insert_buffer("staging", staging);
 
     let mut pipelines = PipelineStorage::new();
     pipelines.insert_compute_pipeline("compute_levels", pipeline);
 
     println!("{graph:#?}");
+
     let mut comp = graph.compile(ctx, &pipelines).unwrap();
+
+    println!("{comp:#?}");
+
     comp.run(ctx, &resources).unwrap();
 
     let staging = resources.get_buffer("staging").unwrap();
