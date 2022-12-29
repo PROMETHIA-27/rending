@@ -1,5 +1,4 @@
 use std::fmt::Debug;
-use std::ops::Index;
 
 use smallvec::SmallVec;
 
@@ -11,9 +10,10 @@ pub struct Bitset {
 
 impl Bitset {
     pub fn new(len: usize) -> Self {
-        let word_len = len / 64 + if len % 64 != 0 { 1 } else { 0 };
         Self {
-            words: std::iter::repeat(0).take(word_len).collect(),
+            words: std::iter::repeat(0)
+                .take(Self::compute_word_len(len))
+                .collect(),
             len,
         }
     }
@@ -24,7 +24,7 @@ impl Bitset {
         }
 
         let old_word_len = self.word_len();
-        let new_word_len = len / 64 + if len % 64 != 0 { 1 } else { 0 };
+        let new_word_len = Self::compute_word_len(len);
         for _ in old_word_len..new_word_len {
             self.words.push(0);
         }
@@ -32,7 +32,10 @@ impl Bitset {
     }
 
     fn word_len(&self) -> usize {
-        let len = self.len;
+        Self::compute_word_len(self.len)
+    }
+
+    fn compute_word_len(len: usize) -> usize {
         len / 64 + if len % 64 != 0 { 1 } else { 0 }
     }
 
@@ -46,26 +49,26 @@ impl Bitset {
         Some(bit != 0)
     }
 
-    pub fn insert(&mut self, index: usize) -> Result<(), ()> {
+    pub fn insert(&mut self, index: usize) {
         if index >= self.len {
-            return Err(());
+            self.resize(index + 1);
         }
 
         let word = &mut self.words[index / 64];
         let mask = (1 << 63) >> (index % 64);
         *word |= mask;
-        Ok(())
     }
 
-    pub fn remove(&mut self, index: usize) -> Result<(), ()> {
+    pub fn remove(&mut self, index: usize) -> bool {
         if index >= self.len {
-            return Err(());
+            return false;
         }
 
         let word = &mut self.words[index / 64];
         let mask = (1 << 63) >> (index % 64);
+        let value = *word & mask != 0;
         *word &= !mask;
-        Ok(())
+        value
     }
 
     pub fn invert(&mut self) {
@@ -102,6 +105,15 @@ impl Bitset {
         for i in 0..self.word_len() {
             self.words[i] &= !other.words[i];
         }
+    }
+
+    pub fn intersects_with(&self, other: &Bitset) -> bool {
+        for i in 0..self.word_len().min(other.word_len()) {
+            if self.words[i] & other.words[i] != 0 {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn iter(&self) -> Iter {
@@ -167,14 +179,14 @@ fn bitset_fmt() {
 #[test]
 fn bitset_union() {
     let mut x = Bitset::new(4);
-    x.insert(1).unwrap();
-    x.insert(3).unwrap();
+    x.insert(1);
+    x.insert(3);
 
     assert_eq!(&format!("{x:?}")[..], "Bitset { 0101 }");
 
     let mut y = Bitset::new(8);
-    y.insert(6).unwrap();
-    y.insert(7).unwrap();
+    y.insert(6);
+    y.insert(7);
 
     assert_eq!(&format!("{y:?}")[..], "Bitset { 00000011 }");
 
@@ -186,11 +198,11 @@ fn bitset_union() {
 #[test]
 fn bitset_iter() {
     let mut bitset = Bitset::new(8);
-    bitset.insert(0).unwrap();
-    bitset.insert(2).unwrap();
-    bitset.insert(5).unwrap();
-    bitset.insert(6).unwrap();
-    bitset.insert(7).unwrap();
+    bitset.insert(0);
+    bitset.insert(2);
+    bitset.insert(5);
+    bitset.insert(6);
+    bitset.insert(7);
 
     let mut string = "".to_string();
     for elem in bitset.iter() {

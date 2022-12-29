@@ -1,23 +1,15 @@
 use std::borrow::Cow;
 
-use naga::{FastHashMap, FastHashSet};
+use naga::FastHashSet;
 use slotmap::new_key_type;
 
 use crate::commands::RenderCommands;
-use crate::resources::{ResourceProvider, ResourceType};
+use crate::resources::Resources;
 
 new_key_type! { pub struct NodeKey; }
 
 pub trait RenderNode {
     fn name() -> Cow<'static, str>;
-
-    fn reads() -> Vec<NodeInput> {
-        vec![]
-    }
-
-    fn writes() -> Vec<NodeOutput> {
-        vec![]
-    }
 
     // TODO: Ergonomics of this are garbage. Fix it
     fn before() -> Vec<Cow<'static, str>> {
@@ -28,7 +20,7 @@ pub trait RenderNode {
         vec![]
     }
 
-    fn run(commands: &mut RenderCommands, resources: &ResourceProvider);
+    fn run(commands: &mut RenderCommands, resources: &mut Resources);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -42,23 +34,6 @@ impl NodeInput {
             resource: resource.into(),
         }
     }
-
-    // pub fn retained(resource: impl Into<Cow<'static, str>>) -> Self {
-    //     Self {
-    //         resource: resource.into(),
-    //         source: ResourceSource::Retained,
-    //     }
-    // }
-
-    // pub fn node(
-    //     resource: impl Into<Cow<'static, str>>,
-    //     node: impl Into<Cow<'static, str>>,
-    // ) -> Self {
-    //     Self {
-    //         resource: resource.into(),
-    //         source: ResourceSource::Node(node.into()),
-    //     }
-    // }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -74,49 +49,13 @@ impl NodeOutput {
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) enum OrderingList {
-    Names(FastHashSet<Cow<'static, str>>),
-    Keys(FastHashSet<NodeKey>),
-}
-
-impl OrderingList {
-    pub fn is_names(&self) -> bool {
-        match self {
-            OrderingList::Names(_) => true,
-            OrderingList::Keys(_) => false,
-        }
-    }
-
-    pub fn is_keys(&self) -> bool {
-        match self {
-            OrderingList::Names(_) => false,
-            OrderingList::Keys(_) => true,
-        }
-    }
-
-    pub fn unwrap_keys(&self) -> &FastHashSet<NodeKey> {
-        match self {
-            OrderingList::Keys(keys) => keys,
-            _ => panic!("unwrapped names"),
-        }
-    }
-
-    pub fn unwrap_keys_mut(&mut self) -> &mut FastHashSet<NodeKey> {
-        match self {
-            OrderingList::Keys(keys) => keys,
-            _ => panic!("unwrapped names"),
-        }
-    }
-}
+pub(crate) type OrderingList = FastHashSet<Cow<'static, str>>;
 
 #[derive(Clone)]
 pub struct RenderNodeMeta {
-    pub(crate) reads: FastHashSet<Cow<'static, str>>,
-    pub(crate) writes: FastHashSet<Cow<'static, str>>,
     pub(crate) before: OrderingList,
     pub(crate) after: OrderingList,
-    pub(crate) run_fn: fn(&mut RenderCommands, &ResourceProvider),
+    pub(crate) run_fn: fn(&mut RenderCommands, &mut Resources),
     pub(crate) type_name: Option<&'static str>,
 }
 
@@ -127,8 +66,6 @@ impl std::fmt::Debug for RenderNodeMeta {
             None => None,
         };
         f.debug_struct("RenderNodeMeta")
-            .field("inputs", &self.reads)
-            .field("outputs", &self.writes)
             .field("before", &self.before)
             .field("after", &self.after)
             .field(
@@ -139,25 +76,5 @@ impl std::fmt::Debug for RenderNodeMeta {
                     .unwrap_or("custom fn"),
             )
             .finish()
-    }
-}
-
-impl RenderNodeMeta {
-    pub fn conflicts_with(&self, other: &RenderNodeMeta) -> bool {
-        if self.reads.union(&other.writes).next().is_some() {
-            return true;
-        }
-        if self.writes.union(&other.writes).next().is_some() {
-            return true;
-        }
-
-        if other.reads.union(&self.writes).next().is_some() {
-            return true;
-        }
-        if other.writes.union(&self.writes).next().is_some() {
-            return true;
-        }
-
-        false
     }
 }

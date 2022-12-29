@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 
-use naga::{FastHashMap, FastHashSet};
+use naga::FastHashMap;
+use wgpu::BufferUsages;
+use wgpu_core::hub::Resource;
 
-use crate::node::{NodeInput, NodeOutput};
 use crate::resources::{
-    BindGroupCache, BindGroupLayouts, BufferHandle, ComputePipelines, DataResources,
-    PipelineLayouts, RenderResources, ResourceHandle, ResourceUse, VirtualBuffers,
+    BindGroupCache, BufferHandle, PipelineStorage, ResourceHandle, ResourceUse,
 };
 
 pub use self::inout::{ReadBuffer, ReadWriteBuffer, WriteBuffer};
@@ -14,22 +14,15 @@ pub(crate) use self::pass::{ComputePassCommand, ComputePassCommands};
 mod inout;
 mod pass;
 
+#[derive(Debug)]
 pub(crate) enum RenderCommand {
     WriteBuffer(BufferHandle, u64, Vec<u8>),
     CopyBufferToBuffer(BufferHandle, u64, BufferHandle, u64, u64),
     ComputePass(Option<Cow<'static, str>>, Vec<ComputePassCommand>),
 }
 
-pub(crate) struct RenderCommandResources<'r> {
-    pub data_resources: &'r DataResources,
-    pub virtual_buffers: &'r mut VirtualBuffers,
-    pub compute_pipelines: &'r ComputePipelines,
-    pub bind_group_layouts: &'r BindGroupLayouts,
-    pub pipeline_layouts: &'r PipelineLayouts,
-}
-
 pub struct RenderCommands<'q, 'r> {
-    pub(crate) resources: RenderCommandResources<'r>,
+    pub(crate) pipelines: &'r PipelineStorage,
     pub(crate) queue: &'q mut Vec<RenderCommand>,
     pub(crate) bind_cache: &'q mut BindGroupCache,
     pub(crate) resource_meta: &'q mut FastHashMap<ResourceHandle, ResourceUse>,
@@ -40,7 +33,25 @@ impl<'q, 'r> RenderCommands<'q, 'r> {
         self.queue.push(c)
     }
 
+    fn buffer_meta(&mut self, handle: BufferHandle) -> (&mut u64, &mut BufferUsages, &mut bool) {
+        let handle = ResourceHandle::Buffer(handle);
+        match self
+            .resource_meta
+            .entry(handle)
+            .or_insert(ResourceUse::default_from_handle(handle))
+        {
+            ResourceUse::Buffer {
+                size,
+                usage,
+                mapped,
+            } => (size, usage, mapped),
+        }
+    }
+
     pub fn write_buffer(&mut self, buffer: WriteBuffer, offset: u64, bytes: &[u8]) {
+        let (size, usage, _) = self.buffer_meta(buffer.0);
+        *size = (*size).max(offset + bytes.len() as u64);
+        *usage |= BufferUsages::COPY_DST;
         self.enqueue(RenderCommand::WriteBuffer(
             buffer.0,
             offset,
@@ -70,6 +81,13 @@ impl<'q, 'r> RenderCommands<'q, 'r> {
         size: u64,
     ) {
         let (src, dst) = (src.0, dst.0);
+
+        let (src_size, usage, _) = self.buffer_meta(src);
+        *src_size = (*src_size).max(src_offset + size);
+        *usage |= BufferUsages::COPY_SRC;
+        let (dst_size, usage, _) = self.buffer_meta(dst);
+        *dst_size = (*dst_size).max(dst_offset + size);
+        *usage |= BufferUsages::COPY_DST;
 
         self.enqueue(RenderCommand::CopyBufferToBuffer(
             src, src_offset, dst, dst_offset, size,

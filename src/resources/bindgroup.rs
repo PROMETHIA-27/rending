@@ -2,13 +2,19 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
 use naga::FastHashMap;
-use slotmap::{new_key_type, SlotMap};
-use wgpu::{BindGroupDescriptor, BindGroupEntry, BindingResource, BufferBinding};
+use slotmap::{new_key_type, SecondaryMap, SlotMap};
+use wgpu::{BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, BufferBinding};
 
 use crate::RenderContext;
 
 use super::buffer::BufferUse;
-use super::{BindGroupLayoutHandle, BufferHandle, RenderResources, ResourceHandle, ResourceUse};
+use super::pipeline::PipelineStorage;
+use super::{
+    BindGroupLayoutHandle, BufferBindings, BufferHandle, RenderResources, ResourceHandle,
+    ResourceUse,
+};
+
+pub(crate) type BindGroups = SecondaryMap<BindGroupHandle, BindGroup>;
 
 new_key_type! { pub(crate) struct BindGroupHandle; }
 
@@ -52,12 +58,14 @@ impl BindGroupCache {
     pub fn create_groups(
         &self,
         context: RenderContext,
-        resources: &mut RenderResources,
+        pipelines: &PipelineStorage,
+        resources: &RenderResources,
+        bound_buffers: &BufferBindings,
         meta: &FastHashMap<ResourceHandle, ResourceUse>,
-    ) {
-        resources.bind_groups.set_capacity(self.groups.len());
+    ) -> BindGroups {
+        let mut bind_groups = BindGroups::with_capacity(self.groups.len());
         for (handle, (layout, bindings)) in &self.groups {
-            let layout = resources
+            let layout = pipelines
                 .bind_group_layouts
                 .get(*layout)
                 .expect("bind group layouts should not be invalidated before bind group creation");
@@ -81,9 +89,9 @@ impl BindGroupCache {
                                 },
                                 ResourceUse::Buffer { .. },
                             ) => BindingResource::Buffer(BufferBinding {
-                                buffer: &resources.buffers.get(handle).expect(
+                                buffer: bound_buffers.get(handle).expect(
                                     "buffers should not be invalidated before bind group creation",
-                                ),
+                                ).as_ref(),
                                 offset,
                                 size,
                             }),
@@ -99,8 +107,9 @@ impl BindGroupCache {
                 entries: &entries,
             });
 
-            resources.bind_groups.insert(handle, bind_group);
+            bind_groups.insert(handle, bind_group);
         }
+        bind_groups
     }
 }
 

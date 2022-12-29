@@ -1,80 +1,63 @@
-use std::borrow::Cow;
-use std::collections::BTreeMap;
-
 use naga::{FastHashMap, FastHashSet};
-use slotmap::{SecondaryMap, SlotMap};
+use slotmap::SecondaryMap;
 use thiserror::Error;
-use wgpu::{Buffer, CommandEncoderDescriptor, ComputePassDescriptor};
+use wgpu::{BufferDescriptor, BufferUsages, CommandEncoderDescriptor, ComputePassDescriptor};
 
 use crate::bitset::Bitset;
-use crate::commands::{ComputePassCommand, RenderCommand, RenderCommandResources, RenderCommands};
+use crate::commands::{ComputePassCommand, RenderCommand, RenderCommands};
 use crate::named_slotmap::NamedSlotMap;
-use crate::node::{NodeInput, NodeKey, NodeOutput, OrderingList, RenderNode, RenderNodeMeta};
-use crate::reflect::ReflectedComputePipeline;
+use crate::node::{NodeKey, OrderingList, RenderNode, RenderNodeMeta};
 use crate::resources::{
-    BindGroupCache, BufferHandle, ComputePipelineHandle, RenderResources, ResourceHandle,
-    ResourceProvider, VirtualBuffer,
+    BindGroupCache, BufferBinding, BufferBindings, NodeResourceAccess, PipelineStorage,
+    RenderResources, ResourceAccesses, ResourceHandle, ResourceList, ResourceRev, ResourceUse,
+    Resources, VirtualBuffers,
 };
-use crate::util::IterCombinations;
 use crate::RenderContext;
 
 #[derive(Debug, Error)]
 pub enum RenderGraphError {
     #[error("referenced node that does not exist")]
     MissingNode,
-    #[error("could not find retained resource {0}")]
-    MissingResource(String),
     #[error("a cycle was detected in the node order between nodes `{0}` and `{1}`")]
     CycleDetected(String, String),
     #[error("Write order ambiguities were detected between the following nodes: {0:#?}. 
     Please ensure each of these nodes are explicitly ordered using `after` and `before` constraints.")]
     WriteOrderAmbiguity(Vec<(String, String)>),
+    #[error("attempted to use a retained buffer `{0}` which was too small for its usage.")]
+    BufferTooSmall(String),
+    #[error("attempted to use a retained buffer `{0}` which lacked usage flags for what it was used for. Missing flags: {1:?}")]
+    MissingBufferUsage(String, BufferUsages),
 }
 
 #[derive(Debug)]
 pub struct RenderGraph {
     // TODO: Store nodes in a NamedDenseSlotMap
     nodes: NamedSlotMap<NodeKey, RenderNodeMeta>,
-    resources: RenderResources,
 }
 
-// TODO: What is the lifetime of bind groups?
 impl RenderGraph {
     pub fn new() -> Self {
         Self {
             nodes: NamedSlotMap::new(),
-            resources: RenderResources::new(),
         }
     }
 
     pub fn add_node<T: RenderNode>(&mut self) {
-        let (inputs, outputs, run_fn, type_name) = (
-            T::reads(),
-            T::writes(),
-            T::run,
-            Some(std::any::type_name::<T>()),
-        );
-
         let meta = RenderNodeMeta {
-            reads: Vec::into_iter(T::reads())
-                .map(|input| input.resource)
-                .collect(),
-            writes: Vec::into_iter(T::writes())
-                .map(|output| output.resource)
-                .collect(),
             // Vec::into_iter is used over .into_iter so that this errors if I change the functions to not be Vec
-            before: OrderingList::Names(Vec::into_iter(T::before()).collect()),
-            after: OrderingList::Names(Vec::into_iter(T::after()).collect()),
-            run_fn,
-            type_name,
+            before: Vec::into_iter(T::before()).collect(),
+            after: Vec::into_iter(T::after()).collect(),
+            run_fn: T::run,
+            type_name: Some(std::any::type_name::<T>()),
         };
 
         self.nodes.insert(T::name(), meta);
     }
 
-    pub fn compile(
-        &mut self,
+    pub fn compile<'g>(
+        &'g mut self,
         ctx: RenderContext,
+        pipelines: &'g PipelineStorage,
     ) -> Result<RenderGraphCompilation, RenderGraphError> {
         // Map of { dependent: dependencies }
         // TODO: Pool this
@@ -83,39 +66,29 @@ impl RenderGraph {
 
         for (key, node) in self.nodes.iter_key_value() {
             // Gather explicit ordering constraints, converted to `after`
-            match &node.before {
-                OrderingList::Names(names) => {
-                    names
-                        .iter()
-                        .filter_map(|name| self.nodes.get_key(&name[..]))
-                        .for_each(|dependent_key| {
-                            dependencies
-                                .entry(dependent_key)
-                                .unwrap()
-                                .or_default()
-                                .push(key);
-                        });
-                }
-                _ => panic!(), // TODO: Remove OrderingList variants!
-            }
+            node.before
+                .iter()
+                .filter_map(|name| self.nodes.get_key(&name[..]))
+                .for_each(|dependent_key| {
+                    dependencies
+                        .entry(dependent_key)
+                        .unwrap()
+                        .or_default()
+                        .push(key);
+                });
 
-            match &node.after {
-                OrderingList::Names(names) => {
-                    dependencies.entry(key).unwrap().or_default().extend(
-                        names
-                            .iter()
-                            .filter_map(|name| self.nodes.get_key(&name[..])),
-                    );
-                }
-                _ => panic!(),
-            }
+            dependencies.entry(key).unwrap().or_default().extend(
+                node.after
+                    .iter()
+                    .filter_map(|name| self.nodes.get_key(&name[..])),
+            );
         }
 
         // Topological sort the nodes into a linear order for execution, taking into account
         // explicit ordering. At the same time, detect cycles, and detect write order ambiguities.
         // TODO: Pool these too
-        let mut queue = vec![];
-        let mut queue_indices = SecondaryMap::new();
+        let mut nodes = vec![];
+        let mut nodes_indices = SecondaryMap::new();
         let mut stack = vec![];
         let mut visited = FastHashSet::default();
 
@@ -148,27 +121,61 @@ impl RenderGraph {
             }
 
             while let Some(next) = stack.pop() {
-                queue.push(next);
-                queue_indices.insert(next, queue.len() - 1);
+                nodes.push(next);
+                nodes_indices.insert(next, nodes.len() - 1);
             }
+        }
+
+        // Run nodes to determine resource usage/build command queue
+        let mut resources = Resources {
+            node_index: 0,
+            resources: ResourceList::new(),
+            resource_rev: ResourceRev::new(),
+            resource_accesses: ResourceAccesses::from_iter(
+                std::iter::repeat(NodeResourceAccess::new()).take(self.nodes.len()),
+            ),
+            virtual_buffers: VirtualBuffers::new(),
+            compute_pipelines: &pipelines.compute_pipelines,
+        };
+
+        // TODO: Pool these bits
+        let mut queue = vec![];
+        let mut bind_cache = BindGroupCache::new();
+        let mut resource_meta = FastHashMap::default();
+
+        for (index, node) in nodes
+            .iter()
+            .map(|&key| self.nodes.get(key).unwrap())
+            .enumerate()
+        {
+            resources.node_index = index;
+
+            let mut commands = RenderCommands {
+                pipelines: &pipelines,
+                queue: &mut queue,
+                bind_cache: &mut bind_cache,
+                resource_meta: &mut resource_meta,
+            };
+
+            (node.run_fn)(&mut commands, &mut resources)
         }
 
         // # Detect ambiguities
         // TODO: Make this optional since it's so expensive
         // Traverse the graph and build up bitsets of all dependencies
         let mut stack = vec![];
-        let all_dependencies: Vec<Bitset> = (0..queue.len())
+        let all_dependencies: Vec<Bitset> = (0..nodes.len())
             .into_iter()
             .map(|index| {
-                let mut bitset = Bitset::new(queue.len());
+                let mut bitset = Bitset::new(nodes.len());
                 stack.push(index);
                 while let Some(next) = stack.pop() {
                     if bitset.contains(next).unwrap() {
                         continue;
                     }
-                    bitset.insert(next).unwrap();
-                    for &dep in &dependencies[queue[next]] {
-                        stack.push(queue_indices[dep]);
+                    bitset.insert(next);
+                    for &dep in &dependencies[nodes[next]] {
+                        stack.push(nodes_indices[dep]);
                     }
                 }
                 bitset
@@ -176,18 +183,13 @@ impl RenderGraph {
             .collect();
 
         let mut ambiguities = vec![];
-        for index_a in 0..queue.len() {
+        for index_a in 0..nodes.len() {
             for index_b in all_dependencies[index_a].inverted().iter() {
                 if !all_dependencies[index_b].contains(index_a).unwrap() {
-                    let (a, b) = (
-                        self.nodes.get(queue[index_a]).unwrap(),
-                        self.nodes.get(queue[index_b]).unwrap(),
-                    );
-
-                    if a.conflicts_with(b) {
+                    if do_nodes_conflict(&resources, index_a, index_b) {
                         ambiguities.push((
-                            self.nodes.get_name(queue[index_a]).unwrap().to_string(),
-                            self.nodes.get_name(queue[index_b]).unwrap().to_string(),
+                            self.nodes.get_name(nodes[index_a]).unwrap().to_string(),
+                            self.nodes.get_name(nodes[index_b]).unwrap().to_string(),
                         ))
                     }
                 }
@@ -199,125 +201,88 @@ impl RenderGraph {
         }
 
         Ok(RenderGraphCompilation {
-            nodes: queue
-                .into_iter()
-                .map(|key| self.nodes.get(key).unwrap().clone())
-                .collect(),
-            resources: &mut self.resources,
+            graph: self,
+            pipelines,
+            queue,
+            bind_cache,
+            resource_meta,
+            virtual_buffers: resources.virtual_buffers,
         })
-    }
-
-    pub fn insert_compute_pipeline(
-        &mut self,
-        name: impl Into<Cow<'static, str>>,
-        pipeline: ReflectedComputePipeline,
-    ) -> ComputePipelineHandle {
-        self.resources.insert_compute_pipeline(name, pipeline)
-    }
-
-    pub fn insert_buffer(
-        &mut self,
-        name: impl Into<Cow<'static, str>>,
-        buffer: Buffer,
-    ) -> BufferHandle {
-        self.resources.insert_buffer(name, buffer)
-    }
-
-    pub fn get_buffer(&self, handle: BufferHandle) -> Option<&Buffer> {
-        self.resources.buffers.get(handle)
-    }
-
-    pub fn get_buffer_named(&mut self, name: &str) -> Option<&Buffer> {
-        self.resources
-            .virtual_buffers
-            .get_key(name)
-            .map(|handle| self.resources.buffers.get(handle).unwrap())
     }
 }
 
 #[derive(Debug)]
 pub struct RenderGraphCompilation<'g> {
-    nodes: Vec<RenderNodeMeta>,
-    resources: &'g mut RenderResources,
+    graph: &'g RenderGraph,
+    pipelines: &'g PipelineStorage,
+    queue: Vec<RenderCommand>,
+    bind_cache: BindGroupCache,
+    resource_meta: FastHashMap<ResourceHandle, ResourceUse>,
+    virtual_buffers: VirtualBuffers,
 }
 
 impl RenderGraphCompilation<'_> {
-    pub fn run(&mut self, ctx: RenderContext) -> Result<(), RenderGraphError> {
-        // TODO: Pool these bits
-        let queue = &mut vec![];
-        let bind_cache = &mut BindGroupCache::new();
-        let resource_meta = &mut FastHashMap::default();
+    pub fn run(
+        &mut self,
+        ctx: RenderContext,
+        res: &RenderResources,
+    ) -> Result<(), RenderGraphError> {
+        let bound_buffers: BufferBindings = self
+            .virtual_buffers
+            .iter_names()
+            .filter_map(|(name, handle)| {
+                let (size, usage, mapped) =
+                    match self.resource_meta.get(&ResourceHandle::Buffer(handle))? {
+                        &ResourceUse::Buffer {
+                            size,
+                            usage,
+                            mapped,
+                        } => (size, usage, mapped),
+                    };
 
-        let mut provider = ResourceProvider::new();
-
-        let RenderCommandResources {
-            data_resources,
-            virtual_buffers,
-            compute_pipelines,
-            bind_group_layouts,
-            pipeline_layouts,
-        } = self.resources.split_for_render();
-
-        for (name, pipeline) in compute_pipelines.iter_names() {
-            provider.compute_pipelines.insert(name, pipeline);
-        }
-
-        for node in &self.nodes {
-            provider.buffer_reads.clear();
-            provider.buffer_writes.clear();
-
-            for read in &node.reads {
-                if let Some(&resource) = data_resources.get(&read[..]) {
-                    match resource {
-                        ResourceHandle::Buffer(handle) => {
-                            provider.buffer_reads.insert(&read[..], handle);
-                        }
+                // Bind retained resources
+                if let Some(buf) = res.buffers.get(name) {
+                    if buf.size() < size {
+                        Some(Err(RenderGraphError::BufferTooSmall(name.to_string())))
+                    } else if !buf.usage().contains(usage) {
+                        Some(Err(RenderGraphError::MissingBufferUsage(
+                            name.to_string(),
+                            usage.difference(buf.usage()),
+                        )))
+                    } else {
+                        Some(Ok((handle, BufferBinding::Retained(buf))))
                     }
-                } else {
-                    // There's no retained/previously instantiated transient resource, so create a transient
-                    provider.transient_reads.insert(&read[..]);
                 }
-            }
-
-            for write in &node.writes {
-                if let Some(&resource) = data_resources.get(&write[..]) {
-                    match resource {
-                        ResourceHandle::Buffer(handle) => {
-                            provider.buffer_writes.insert(&write[..], handle);
-                        }
-                    }
-                } else {
-                    provider.transient_writes.insert(&write[..]);
+                // Create transients
+                else {
+                    let buffer = ctx.device.create_buffer(&BufferDescriptor {
+                        label: None,
+                        size,
+                        usage,
+                        mapped_at_creation: mapped,
+                    });
+                    Some(Ok((handle, BufferBinding::Transient(buffer))))
                 }
-            }
-
-            let mut commands = RenderCommands {
-                resources: RenderCommandResources {
-                    data_resources,
-                    virtual_buffers,
-                    compute_pipelines,
-                    bind_group_layouts,
-                    pipeline_layouts,
-                },
-                queue,
-                bind_cache,
-                resource_meta,
-            };
-
-            (node.run_fn)(&mut commands, &provider)
-        }
+            })
+            .collect::<Result<BufferBindings, RenderGraphError>>()?;
 
         // Make bind groups
-        bind_cache.create_groups(ctx, &mut self.resources, &resource_meta);
+        let bind_groups = self.bind_cache.create_groups(
+            ctx,
+            &self.pipelines,
+            res,
+            &bound_buffers,
+            &self.resource_meta,
+        );
 
         // Execute render command queue
         let mut encoder = ctx
             .device
             .create_command_encoder(&CommandEncoderDescriptor { label: None });
-        for command in queue.iter() {
+        for command in self.queue.iter() {
             match command {
                 RenderCommand::WriteBuffer(handle, offset, data) => {
-                    let buffer = self.resources.buffers.get(*handle).unwrap();
+                    let buffer = bound_buffers.get(*handle).unwrap().as_ref();
                     ctx.queue.write_buffer(&buffer, *offset, &data[..]);
                 }
                 RenderCommand::ComputePass(label, commands) => {
@@ -328,11 +293,11 @@ impl RenderGraphCompilation<'_> {
                         match command {
                             ComputePassCommand::SetPipeline(handle) => {
                                 let pipeline =
-                                    self.resources.compute_pipelines.get(*handle).unwrap();
+                                    self.pipelines.compute_pipelines.get(*handle).unwrap();
                                 pass.set_pipeline(&pipeline.wgpu);
                             }
                             ComputePassCommand::BindGroup(index, handle) => {
-                                let group = self.resources.bind_groups.get(*handle).unwrap();
+                                let group = bind_groups.get(*handle).unwrap();
                                 // TODO: Still haven't looked at dynamic offsets
                                 pass.set_bind_group(*index, group, &[]);
                             }
@@ -343,8 +308,8 @@ impl RenderGraphCompilation<'_> {
                     }
                 }
                 &RenderCommand::CopyBufferToBuffer(src, src_off, dst, dst_off, size) => {
-                    let src = self.resources.buffers.get(src).unwrap();
-                    let dst = self.resources.buffers.get(dst).unwrap();
+                    let src = bound_buffers.get(src).unwrap().as_ref();
+                    let dst = bound_buffers.get(dst).unwrap().as_ref();
                     encoder.copy_buffer_to_buffer(&src, src_off, &dst, dst_off, size);
                 }
             }
@@ -353,5 +318,19 @@ impl RenderGraphCompilation<'_> {
         ctx.queue.submit([commandbuffer]);
 
         Ok(())
+    }
+}
+
+fn do_nodes_conflict(res: &Resources, left: usize, right: usize) -> bool {
+    let (left, right) = (&res.resource_accesses[left], &res.resource_accesses[right]);
+
+    if left.reads.intersects_with(&right.writes) {
+        true
+    } else if right.reads.intersects_with(&left.writes) {
+        true
+    } else if left.writes.intersects_with(&right.writes) {
+        true
+    } else {
+        false
     }
 }
