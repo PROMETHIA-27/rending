@@ -11,14 +11,6 @@ new_key_type! { pub struct NodeKey; }
 pub trait RenderNode {
     fn name() -> Cow<'static, str>;
 
-    fn reads() -> Vec<NodeInput> {
-        vec![]
-    }
-
-    fn writes() -> Vec<NodeOutput> {
-        vec![]
-    }
-
     // TODO: Ergonomics of this are garbage. Fix it
     fn before() -> Vec<Cow<'static, str>> {
         vec![]
