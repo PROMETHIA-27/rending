@@ -4,8 +4,8 @@ use naga::{FastHashMap, FastHashSet};
 
 use crate::node::{NodeInput, NodeOutput};
 use crate::resources::{
-    BindGroupCache, BindGroupLayouts, BufferHandle, ComputePipelines, DataResources,
-    PipelineLayouts, RenderResources, ResourceHandle, ResourceUse, VirtualBuffers,
+    BindGroupCache, BufferHandle, DataResources, PipelineStorage, RenderResources, ResourceHandle,
+    ResourceUse, VirtualBuffers,
 };
 
 pub use self::inout::{ReadBuffer, ReadWriteBuffer, WriteBuffer};
@@ -14,22 +14,15 @@ pub(crate) use self::pass::{ComputePassCommand, ComputePassCommands};
 mod inout;
 mod pass;
 
+#[derive(Debug)]
 pub(crate) enum RenderCommand {
     WriteBuffer(BufferHandle, u64, Vec<u8>),
     CopyBufferToBuffer(BufferHandle, u64, BufferHandle, u64, u64),
     ComputePass(Option<Cow<'static, str>>, Vec<ComputePassCommand>),
 }
 
-pub(crate) struct RenderCommandResources<'r> {
-    pub data_resources: &'r DataResources,
-    pub virtual_buffers: &'r mut VirtualBuffers,
-    pub compute_pipelines: &'r ComputePipelines,
-    pub bind_group_layouts: &'r BindGroupLayouts,
-    pub pipeline_layouts: &'r PipelineLayouts,
-}
-
 pub struct RenderCommands<'q, 'r> {
-    pub(crate) resources: RenderCommandResources<'r>,
+    pub(crate) pipelines: &'r PipelineStorage,
     pub(crate) queue: &'q mut Vec<RenderCommand>,
     pub(crate) bind_cache: &'q mut BindGroupCache,
     pub(crate) resource_meta: &'q mut FastHashMap<ResourceHandle, ResourceUse>,
