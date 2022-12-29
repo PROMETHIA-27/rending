@@ -4,7 +4,7 @@ use std::path::Path;
 use commands::RenderCommands;
 use node::{NodeInput, NodeOutput, RenderNode};
 use reflect::{ModuleError, ReflectedComputePipeline};
-use resources::ResourceProvider;
+use resources::Resources;
 use spirv_iter::SpirvIterator;
 use thiserror::Error;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
@@ -110,10 +110,10 @@ impl RenderNode for ComputeLevels {
         ]
     }
 
-    fn run(commands: &mut RenderCommands, res: &ResourceProvider) {
-        let ascii = res.write_buffer("ascii_buffer");
+    fn run(commands: &mut RenderCommands, res: &mut Resources) {
+        // let ascii = res.write_buffer("ascii_buffer");
 
-        commands.write_buffer(ascii, 0, &[0xDE, 0xAD, 0xBE, 0xEF]);
+        // commands.write_buffer(ascii, 0, &[0xDE, 0xAD, 0xBE, 0xEF]);
 
         // commands
         //     .compute_pass(Some("pass"))
@@ -142,10 +142,10 @@ impl RenderNode for CopyToStaging {
         vec![ComputeLevels::name()]
     }
 
-    fn run(commands: &mut RenderCommands, res: &ResourceProvider) {
+    fn run(commands: &mut RenderCommands, res: &mut Resources) {
         let buffer = res.read_buffer("ascii_buffer");
-        let staging = res.write_buffer("staging");
-        commands.copy_buffer_to_buffer(buffer, 0, staging, 0, 4);
+        // let staging = res.write_buffer("staging");
+        // commands.copy_buffer_to_buffer(buffer, 0, staging, 0, 4);
     }
 }
 
@@ -199,19 +199,19 @@ fn test() {
 
     let mut graph = RenderGraph::new();
 
-    graph.insert_buffer("ascii_buffer", ascii_buffer);
-    graph.insert_buffer("staging", staging);
-    graph.insert_compute_pipeline("compute_levels", pipeline);
+    // graph.insert_buffer("ascii_buffer", ascii_buffer);
+    // graph.insert_buffer("staging", staging);
+    // graph.insert_compute_pipeline("compute_levels", pipeline);
 
     graph.add_node::<ComputeLevels>();
     graph.add_node::<CopyToStaging>();
     println!("{graph:#?}");
     let mut comp = graph.compile(ctx).unwrap();
-    comp.run(ctx).unwrap();
+    // comp.run(ctx).unwrap();
 
-    let staging = graph.get_buffer_named("staging").unwrap();
-    let slice = staging.slice(0..4);
-    slice.map_async(MapMode::Read, |_| ());
-    ctx.device.poll(wgpu::MaintainBase::Wait);
-    println!("New bytes: {:?}", &slice.get_mapped_range()[..]);
+    // let staging = graph.get_buffer_named("staging").unwrap();
+    // let slice = staging.slice(0..4);
+    // slice.map_async(MapMode::Read, |_| ());
+    // ctx.device.poll(wgpu::MaintainBase::Wait);
+    // println!("New bytes: {:?}", &slice.get_mapped_range()[..]);
 }
