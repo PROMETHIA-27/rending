@@ -8,8 +8,8 @@ use crate::commands::{ReadBuffer, WriteBuffer};
 use crate::named_slotmap::NamedSlotMap;
 
 pub(crate) use self::bindgroup::{BindGroupCache, BindGroupHandle, ResourceBinding};
-pub use self::buffer::BufferHandle;
 pub(crate) use self::buffer::{BufferBinding, BufferBindings, BufferUse, VirtualBuffer};
+pub use self::buffer::{BufferHandle, BufferSlice};
 pub use self::layout::BindGroupLayout;
 pub use self::layout::{BindGroupLayoutHandle, PipelineLayout, PipelineLayoutHandle};
 pub use self::module::ShaderModule;
@@ -186,6 +186,13 @@ impl ResourceUse {
                 usage: BufferUsages::empty(),
                 mapped: false,
             },
+        }
+    }
+
+    pub fn set_buffer_size(&mut self, size: u64) {
+        match self {
+            ResourceUse::Buffer { size: buf_size, .. } => *buf_size = (*buf_size).max(size),
+            _ => panic!("attempted to bind a non-buffer resource to a buffer slot"),
         }
     }
 
