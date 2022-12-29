@@ -22,6 +22,8 @@ mod resources;
 mod spirv_iter;
 mod util;
 
+pub mod prelude;
+
 #[derive(Copy, Clone)]
 pub struct RenderContext<'i, 'a, 'd, 'q> {
     pub instance: &'i Instance,
