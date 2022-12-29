@@ -3,13 +3,17 @@ use std::num::NonZeroU64;
 
 use naga::FastHashMap;
 use slotmap::{new_key_type, SecondaryMap, SlotMap};
-use wgpu::{BindGroupDescriptor, BindGroupEntry, BindingResource, BufferBinding};
+use wgpu::{
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, Buffer, BufferBinding,
+};
 
 use crate::RenderContext;
 
 use super::buffer::BufferUse;
-use super::pipeline::{BindGroups, PipelineStorage};
+use super::pipeline::PipelineStorage;
 use super::{BindGroupLayoutHandle, BufferHandle, RenderResources, ResourceHandle, ResourceUse};
+
+pub(crate) type BindGroups = SecondaryMap<BindGroupHandle, BindGroup>;
 
 new_key_type! { pub(crate) struct BindGroupHandle; }
 
@@ -56,6 +60,7 @@ impl BindGroupCache {
         context: RenderContext,
         pipelines: &PipelineStorage,
         resources: &RenderResources,
+        bound_buffers: &SecondaryMap<BufferHandle, &Buffer>,
         meta: &FastHashMap<ResourceHandle, ResourceUse>,
     ) -> BindGroups {
         let mut bind_groups = BindGroups::with_capacity(self.groups.len());
@@ -84,7 +89,7 @@ impl BindGroupCache {
                                 },
                                 ResourceUse::Buffer { .. },
                             ) => BindingResource::Buffer(BufferBinding {
-                                buffer: &resources.buffers.get(handle).expect(
+                                buffer: bound_buffers.get(handle).expect(
                                     "buffers should not be invalidated before bind group creation",
                                 ),
                                 offset,

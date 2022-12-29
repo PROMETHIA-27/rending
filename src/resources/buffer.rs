@@ -2,7 +2,6 @@ use std::num::NonZeroU64;
 use std::ops::RangeBounds;
 
 use slotmap::new_key_type;
-use wgpu::BufferUsages;
 
 use super::{RWMode, ResourceBinding};
 

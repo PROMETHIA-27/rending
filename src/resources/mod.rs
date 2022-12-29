@@ -1,14 +1,11 @@
 use std::borrow::{Borrow, Cow};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use naga::FastHashMap;
-use slotmap::{SecondaryMap, SlotMap};
-use wgpu::{BindGroup, Buffer, BufferUsages};
+use wgpu::{Buffer, BufferUsages};
 
 use crate::bitset::Bitset;
-use crate::commands::{ReadBuffer, ReadWriteBuffer, WriteBuffer};
+use crate::commands::ReadBuffer;
 use crate::named_slotmap::NamedSlotMap;
-use crate::reflect::ReflectedComputePipeline;
 
 pub(crate) use self::bindgroup::{BindGroupCache, BindGroupHandle, ResourceBinding};
 pub use self::buffer::BufferHandle;
@@ -26,8 +23,7 @@ mod module;
 mod pipeline;
 
 pub(crate) type DataResources = BTreeMap<Cow<'static, str>, ResourceHandle>;
-pub(crate) type VirtualBuffers = NamedSlotMap<BufferHandle, VirtualBuffer>;
-pub(crate) type Buffers = SecondaryMap<BufferHandle, Buffer>;
+pub(crate) type Buffers = BTreeMap<Cow<'static, str>, Buffer>;
 
 #[derive(Debug)]
 pub struct RenderResources {
@@ -39,8 +35,8 @@ pub struct RenderResources {
 impl RenderResources {
     pub fn new() -> Self {
         Self {
-            data_resources: BTreeMap::new(),
-            buffers: SecondaryMap::new(),
+            data_resources: DataResources::new(),
+            buffers: Buffers::new(),
         }
     }
 
@@ -91,9 +87,19 @@ pub(crate) struct NodeResourceAccess {
     pub writes: Bitset,
 }
 
-type ResourceList = Vec<(Cow<'static, str>, ResourceHandle)>;
-type ResourceRev = BTreeMap<Cow<'static, str>, (usize, ResourceHandle)>;
-type ResourceAccesses = Vec<NodeResourceAccess>;
+impl NodeResourceAccess {
+    pub fn new() -> Self {
+        Self {
+            reads: Bitset::new(0),
+            writes: Bitset::new(0),
+        }
+    }
+}
+
+pub(crate) type ResourceList = Vec<(Cow<'static, str>, ResourceHandle)>;
+pub(crate) type ResourceRev = BTreeMap<Cow<'static, str>, (usize, ResourceHandle)>;
+pub(crate) type ResourceAccesses = Vec<NodeResourceAccess>;
+pub(crate) type VirtualBuffers = NamedSlotMap<BufferHandle, VirtualBuffer>;
 
 #[derive(Debug)]
 pub struct Resources<'s> {

@@ -1,13 +1,12 @@
 use std::borrow::Cow;
 
-use slotmap::{new_key_type, SecondaryMap, SlotMap};
-use wgpu::BindGroup;
+use slotmap::{new_key_type, SlotMap};
 
 use crate::named_slotmap::NamedSlotMap;
 use crate::reflect::ReflectedComputePipeline;
 
 use super::layout::PipelineLayoutHandle;
-use super::{BindGroupHandle, BindGroupLayout, BindGroupLayoutHandle, PipelineLayout};
+use super::{BindGroupLayout, BindGroupLayoutHandle, PipelineLayout};
 
 new_key_type! { pub struct ComputePipelineHandle; }
 
@@ -18,7 +17,6 @@ pub struct ComputePipeline {
 }
 
 pub(crate) type ComputePipelines = NamedSlotMap<ComputePipelineHandle, ComputePipeline>;
-pub(crate) type BindGroups = SecondaryMap<BindGroupHandle, BindGroup>;
 pub(crate) type BindGroupLayouts = SlotMap<BindGroupLayoutHandle, BindGroupLayout>;
 pub(crate) type PipelineLayouts = SlotMap<PipelineLayoutHandle, PipelineLayout>;
 

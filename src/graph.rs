@@ -1,21 +1,17 @@
-use std::borrow::Cow;
-use std::collections::BTreeMap;
-
 use naga::{FastHashMap, FastHashSet};
-use slotmap::{SecondaryMap, SlotMap};
+use slotmap::SecondaryMap;
 use thiserror::Error;
 use wgpu::{Buffer, CommandEncoderDescriptor, ComputePassDescriptor};
 
 use crate::bitset::Bitset;
 use crate::commands::{ComputePassCommand, RenderCommand, RenderCommands};
 use crate::named_slotmap::NamedSlotMap;
-use crate::node::{NodeInput, NodeKey, NodeOutput, OrderingList, RenderNode, RenderNodeMeta};
-use crate::reflect::ReflectedComputePipeline;
+use crate::node::{NodeKey, OrderingList, RenderNode, RenderNodeMeta};
 use crate::resources::{
-    BindGroupCache, BufferHandle, ComputePipelineHandle, NodeResourceAccess, PipelineStorage,
-    RenderResources, ResourceHandle, ResourceUse, Resources, VirtualBuffer, VirtualBuffers,
+    BindGroupCache, BufferHandle, NodeResourceAccess, PipelineStorage, RenderResources,
+    ResourceAccesses, ResourceHandle, ResourceList, ResourceRev, ResourceUse, Resources,
+    VirtualBuffers,
 };
-use crate::util::IterCombinations;
 use crate::RenderContext;
 
 #[derive(Debug, Error)]
@@ -150,14 +146,10 @@ impl RenderGraph {
         // Run nodes to determine resource usage/build command queue
         let mut resources = Resources {
             node_index: 0,
-            resources: vec![],
-            resource_rev: BTreeMap::new(),
-            resource_accesses: Vec::from_iter(
-                std::iter::repeat(NodeResourceAccess {
-                    reads: Bitset::new(0),
-                    writes: Bitset::new(0),
-                })
-                .take(self.nodes.len()),
+            resources: ResourceList::new(),
+            resource_rev: ResourceRev::new(),
+            resource_accesses: ResourceAccesses::from_iter(
+                std::iter::repeat(NodeResourceAccess::new()).take(self.nodes.len()),
             ),
             virtual_buffers: VirtualBuffers::new(),
             compute_pipelines: &self.pipelines.compute_pipelines,
@@ -230,16 +222,18 @@ impl RenderGraph {
             queue,
             bind_cache,
             resource_meta,
+            virtual_buffers: resources.virtual_buffers,
         })
     }
 }
 
 #[derive(Debug)]
 pub struct RenderGraphCompilation<'g> {
-    graph: &'g mut RenderGraph,
+    graph: &'g RenderGraph,
     queue: Vec<RenderCommand>,
     bind_cache: BindGroupCache,
     resource_meta: FastHashMap<ResourceHandle, ResourceUse>,
+    virtual_buffers: VirtualBuffers,
 }
 
 impl RenderGraphCompilation<'_> {
@@ -248,10 +242,23 @@ impl RenderGraphCompilation<'_> {
         ctx: RenderContext,
         res: &mut RenderResources,
     ) -> Result<(), RenderGraphError> {
+        // Bind retained resources
+        let bound_buffers: SecondaryMap<BufferHandle, &Buffer> = self
+            .virtual_buffers
+            .iter_names()
+            .filter_map(|(name, handle)| res.buffers.get(name).map(|buf| (handle, buf)))
+            .collect();
+
+        // Create transients
+
         // Make bind groups
-        let bind_groups =
-            self.bind_cache
-                .create_groups(ctx, &mut self.graph.pipelines, res, &self.resource_meta);
+        let bind_groups = self.bind_cache.create_groups(
+            ctx,
+            &self.graph.pipelines,
+            res,
+            &bound_buffers,
+            &self.resource_meta,
+        );
 
         // Execute render command queue
         let mut encoder = ctx
@@ -260,7 +267,7 @@ impl RenderGraphCompilation<'_> {
         for command in self.queue.iter() {
             match command {
                 RenderCommand::WriteBuffer(handle, offset, data) => {
-                    let buffer = res.buffers.get(*handle).unwrap();
+                    let buffer = bound_buffers.get(*handle).unwrap();
                     ctx.queue.write_buffer(&buffer, *offset, &data[..]);
                 }
                 RenderCommand::ComputePass(label, commands) => {
@@ -286,8 +293,8 @@ impl RenderGraphCompilation<'_> {
                     }
                 }
                 &RenderCommand::CopyBufferToBuffer(src, src_off, dst, dst_off, size) => {
-                    let src = res.buffers.get(src).unwrap();
-                    let dst = res.buffers.get(dst).unwrap();
+                    let src = bound_buffers.get(src).unwrap();
+                    let dst = bound_buffers.get(dst).unwrap();
                     encoder.copy_buffer_to_buffer(&src, src_off, &dst, dst_off, size);
                 }
             }
