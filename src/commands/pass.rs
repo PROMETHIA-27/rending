@@ -1,50 +1,19 @@
 use std::borrow::Cow;
 
 use smallvec::SmallVec;
-use wgpu::ComputePass;
 
 use crate::resources::{
-    BindGroupHandle, BufferUse, ComputePipelineHandle, RenderResources, ResourceBinding,
+    BindGroupHandle, BufferUse, ComputePipelineHandle, ResourceBinding,
     ResourceUse, RWMode,
 };
 
 use super::RenderCommands;
 
+#[derive(Debug)]
 pub(crate) enum ComputePassCommand {
     SetPipeline(ComputePipelineHandle),
     BindGroup(u32, BindGroupHandle),
     Dispatch(u32, u32, u32),
-}
-
-impl ComputePassCommand {
-    pub fn set_pipeline<'c, 'r: 'c>(
-        c: &mut ComputePass<'c>,
-        resources: &'r RenderResources,
-        handle: ComputePipelineHandle,
-    ) {
-        let pipeline = resources
-            .compute_pipelines
-            .get(handle)
-            .expect("failed to access pipeline");
-        c.set_pipeline(&pipeline.wgpu);
-    }
-
-    pub fn set_bind_group<'c, 'r: 'c>(
-        c: &mut ComputePass<'c>,
-        resources: &'r RenderResources,
-        index: u32,
-        handle: BindGroupHandle,
-    ) {
-        let bind_group = resources
-            .bind_groups
-            .get(handle)
-            .expect("failed to access bindgroup");
-        c.set_bind_group(index, &bind_group, &[]) // TODO: Support dynamic offsets
-    }
-
-    pub fn dispatch<'c>(c: &mut ComputePass<'c>, x: u32, y: u32, z: u32) {
-        c.dispatch_workgroups(x, y, z)
-    }
 }
 
 type TempBindings = SmallVec<[(u32, ResourceBinding); 16]>;
@@ -88,11 +57,11 @@ impl ComputePassCommands<'_, '_, '_> {
         } = self;
 
         let compute_pipeline = pipeline
-            .map(|handle| commands.resources.compute_pipelines.get(handle))
+            .map(|handle| commands.pipelines.compute_pipelines.get(handle))
             .expect("attempted to dispatch without a pipeline set")
             .unwrap();
         let layout = commands
-            .resources
+            .pipelines
             .pipeline_layouts
             .get(compute_pipeline.layout)
             .unwrap();
@@ -107,7 +76,7 @@ impl ComputePassCommands<'_, '_, '_> {
 
             let handle = commands.bind_cache.get_handle(group_layout, &binding[..]);
             let group_layout = commands
-                .resources
+                .pipelines
                 .bind_group_layouts
                 .get(layout.groups[group_index as usize])
                 .unwrap();
