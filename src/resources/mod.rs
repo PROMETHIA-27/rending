@@ -1,7 +1,6 @@
 use std::borrow::{Borrow, Cow};
 use std::collections::BTreeMap;
 
-use naga::Handle;
 use wgpu::{Buffer, BufferUsages};
 
 use crate::bitset::Bitset;
@@ -64,7 +63,7 @@ impl From<BufferHandle> for ResourceHandle {
 }
 
 bitflags::bitflags! {
-    pub(crate) struct ResourceAccess : u8 {
+    pub struct RWMode : u8 {
         const READ = 0b01;
         const WRITE = 0b10;
         const READWRITE = Self::READ.bits | Self::WRITE.bits;
@@ -211,11 +210,4 @@ impl ResourceUse {
             _ => panic!("attempted to bind a non-buffer resource to a buffer slot"),
         }
     }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum RWMode {
-    Read,
-    Write,
-    ReadWrite,
 }

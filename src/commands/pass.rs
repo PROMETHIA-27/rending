@@ -101,8 +101,8 @@ impl ComputePassCommands<'_, '_, '_> {
                         wgpu::BufferBindingType::Storage { read_only } => {
                             assert!(
                                 resource.buffer_use().matches_use(BufferUse::Storage(match read_only {
-                                    true => RWMode::Read,
-                                    false => RWMode::ReadWrite,
+                                    true => RWMode::READ,
+                                    false => RWMode::READWRITE,
                                 })), 
                                 "buffer bound to storage slot must be passed as a storage with the same ReadWrite access mode; try using `.storage()` on a `BufferSlice`, and ensure both have the same access mode"
                             );
