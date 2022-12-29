@@ -21,6 +21,7 @@ mod buffer;
 mod layout;
 mod module;
 mod pipeline;
+mod texture;
 
 pub(crate) type Buffers = BTreeMap<Cow<'static, str>, Buffer>;
 
