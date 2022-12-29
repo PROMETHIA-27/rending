@@ -1,7 +1,7 @@
 use naga::{FastHashMap, FastHashSet};
 use slotmap::SecondaryMap;
 use thiserror::Error;
-use wgpu::{BufferDescriptor, CommandEncoderDescriptor, ComputePassDescriptor};
+use wgpu::{BufferDescriptor, BufferUsages, CommandEncoderDescriptor, ComputePassDescriptor};
 
 use crate::bitset::Bitset;
 use crate::commands::{ComputePassCommand, RenderCommand, RenderCommands};
@@ -18,13 +18,15 @@ use crate::RenderContext;
 pub enum RenderGraphError {
     #[error("referenced node that does not exist")]
     MissingNode,
-    #[error("could not find retained resource {0}")]
-    MissingResource(String),
     #[error("a cycle was detected in the node order between nodes `{0}` and `{1}`")]
     CycleDetected(String, String),
     #[error("Write order ambiguities were detected between the following nodes: {0:#?}. 
     Please ensure each of these nodes are explicitly ordered using `after` and `before` constraints.")]
     WriteOrderAmbiguity(Vec<(String, String)>),
+    #[error("attempted to use a retained buffer `{0}` which was too small for its usage.")]
+    BufferTooSmall(String),
+    #[error("attempted to use a retained buffer `{0}` which lacked usage flags for what it was used for. Missing flags: {1:?}")]
+    MissingBufferUsage(String, BufferUsages),
 }
 
 #[derive(Debug)]
@@ -239,32 +241,41 @@ impl RenderGraphCompilation<'_> {
         let bound_buffers: BufferBindings = self
             .virtual_buffers
             .iter_names()
-            .map(|(name, handle)| {
-                // Bind retained resources
-                // TODO: Verify they match their usage
-                if let Some(buf) = res.buffers.get(name) {
-                    (handle, BufferBinding::Retained(buf))
-                }
-                // Create transients
-                else {
-                    let meta = self.resource_meta[&ResourceHandle::Buffer(handle)];
-                    let (size, usage, mapped) = match meta {
-                        ResourceUse::Buffer {
+            .filter_map(|(name, handle)| {
+                let (size, usage, mapped) =
+                    match self.resource_meta.get(&ResourceHandle::Buffer(handle))? {
+                        &ResourceUse::Buffer {
                             size,
                             usage,
                             mapped,
                         } => (size, usage, mapped),
                     };
+
+                // Bind retained resources
+                if let Some(buf) = res.buffers.get(name) {
+                    if buf.size() < size {
+                        Some(Err(RenderGraphError::BufferTooSmall(name.to_string())))
+                    } else if !buf.usage().contains(usage) {
+                        Some(Err(RenderGraphError::MissingBufferUsage(
+                            name.to_string(),
+                            usage.difference(buf.usage()),
+                        )))
+                    } else {
+                        Some(Ok((handle, BufferBinding::Retained(buf))))
+                    }
+                }
+                // Create transients
+                else {
                     let buffer = ctx.device.create_buffer(&BufferDescriptor {
                         label: None,
                         size,
                         usage,
                         mapped_at_creation: mapped,
                     });
-                    (handle, BufferBinding::Transient(buffer))
+                    Some(Ok((handle, BufferBinding::Transient(buffer))))
                 }
             })
-            .collect();
+            .collect::<Result<BufferBindings, RenderGraphError>>()?;
 
         // Make bind groups
         let bind_groups = self.bind_cache.create_groups(
