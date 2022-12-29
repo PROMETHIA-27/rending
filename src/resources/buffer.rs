@@ -127,6 +127,4 @@ impl BufferUse {
 }
 
 #[derive(Debug)]
-pub(crate) struct VirtualBuffer {
-    pub retained: bool,
-}
+pub(crate) struct VirtualBuffer;
