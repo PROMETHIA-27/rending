@@ -108,11 +108,11 @@ impl RenderNode for ComputeLevels {
 
         commands.write_buffer(ascii, 0, &[0xDE, 0xAD, 0xBE, 0xEF]);
 
-        // commands
-        //     .compute_pass(Some("pass"))
-        //     .pipeline(res.compute_pipeline("compute_levels"))
-        //     .bind_group(0, [(0, ascii.slice(..))])
-        //     .dispatch(256, 1, 1);
+        commands
+            .compute_pass(Some("pass"))
+            .pipeline(res.compute_pipeline("compute_levels"))
+            .bind_group(0, [(0, ascii.slice(..).uniform())])
+            .dispatch(256, 1, 1);
     }
 }
 
