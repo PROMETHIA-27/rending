@@ -8,12 +8,14 @@ use wgpu::{BindGroupDescriptor, BindGroupEntry, BindingResource, BufferBinding};
 use crate::RenderContext;
 
 use super::buffer::BufferUse;
+use super::pipeline::PipelineStorage;
 use super::{BindGroupLayoutHandle, BufferHandle, RenderResources, ResourceHandle, ResourceUse};
 
 new_key_type! { pub(crate) struct BindGroupHandle; }
 
 #[derive(Debug)]
 pub(crate) struct BindGroupCache {
+    // TODO: Does reverse need bindgrouplayouthandle too?
     groups: SlotMap<BindGroupHandle, (BindGroupLayoutHandle, Vec<(u32, ResourceBinding)>)>,
     reverse: BTreeMap<Vec<(u32, ResourceBinding)>, BindGroupHandle>,
 }
@@ -52,12 +54,13 @@ impl BindGroupCache {
     pub fn create_groups(
         &self,
         context: RenderContext,
-        resources: &mut RenderResources,
+        pipelines: &mut PipelineStorage,
+        resources: &RenderResources,
         meta: &FastHashMap<ResourceHandle, ResourceUse>,
     ) {
-        resources.bind_groups.set_capacity(self.groups.len());
+        pipelines.bind_groups.set_capacity(self.groups.len());
         for (handle, (layout, bindings)) in &self.groups {
-            let layout = resources
+            let layout = pipelines
                 .bind_group_layouts
                 .get(*layout)
                 .expect("bind group layouts should not be invalidated before bind group creation");
@@ -99,7 +102,7 @@ impl BindGroupCache {
                 entries: &entries,
             });
 
-            resources.bind_groups.insert(handle, bind_group);
+            pipelines.bind_groups.insert(handle, bind_group);
         }
     }
 }
