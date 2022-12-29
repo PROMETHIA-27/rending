@@ -7,13 +7,13 @@ use thiserror::Error;
 use wgpu::{Buffer, CommandEncoderDescriptor, ComputePassDescriptor};
 
 use crate::bitset::Bitset;
-use crate::commands::{ComputePassCommand, RenderCommand, RenderCommandResources, RenderCommands};
+use crate::commands::{ComputePassCommand, RenderCommand, RenderCommands};
 use crate::named_slotmap::NamedSlotMap;
 use crate::node::{NodeInput, NodeKey, NodeOutput, OrderingList, RenderNode, RenderNodeMeta};
 use crate::reflect::ReflectedComputePipeline;
 use crate::resources::{
-    BindGroupCache, BufferHandle, ComputePipelineHandle, RenderResources, ResourceHandle,
-    ResourceProvider, VirtualBuffer,
+    BindGroupCache, BufferHandle, ComputePipelineHandle, NodeResourceAccess, PipelineStorage,
+    RenderResources, ResourceHandle, ResourceUse, Resources, VirtualBuffer, VirtualBuffers,
 };
 use crate::util::IterCombinations;
 use crate::RenderContext;
@@ -35,7 +35,7 @@ pub enum RenderGraphError {
 pub struct RenderGraph {
     // TODO: Store nodes in a NamedDenseSlotMap
     nodes: NamedSlotMap<NodeKey, RenderNodeMeta>,
-    resources: RenderResources,
+    pipelines: PipelineStorage,
 }
 
 // TODO: What is the lifetime of bind groups?
@@ -43,12 +43,12 @@ impl RenderGraph {
     pub fn new() -> Self {
         Self {
             nodes: NamedSlotMap::new(),
-            resources: RenderResources::new(),
+            pipelines: PipelineStorage::new(),
         }
     }
 
     pub fn add_node<T: RenderNode>(&mut self) {
-        let (inputs, outputs, run_fn, type_name) = (
+        let (reads, writes, run_fn, type_name) = (
             T::reads(),
             T::writes(),
             T::run,
@@ -56,12 +56,6 @@ impl RenderGraph {
         );
 
         let meta = RenderNodeMeta {
-            reads: Vec::into_iter(T::reads())
-                .map(|input| input.resource)
-                .collect(),
-            writes: Vec::into_iter(T::writes())
-                .map(|output| output.resource)
-                .collect(),
             // Vec::into_iter is used over .into_iter so that this errors if I change the functions to not be Vec
             before: OrderingList::Names(Vec::into_iter(T::before()).collect()),
             after: OrderingList::Names(Vec::into_iter(T::after()).collect()),
@@ -114,8 +108,8 @@ impl RenderGraph {
         // Topological sort the nodes into a linear order for execution, taking into account
         // explicit ordering. At the same time, detect cycles, and detect write order ambiguities.
         // TODO: Pool these too
-        let mut queue = vec![];
-        let mut queue_indices = SecondaryMap::new();
+        let mut nodes = vec![];
+        let mut nodes_indices = SecondaryMap::new();
         let mut stack = vec![];
         let mut visited = FastHashSet::default();
 
@@ -148,27 +142,66 @@ impl RenderGraph {
             }
 
             while let Some(next) = stack.pop() {
-                queue.push(next);
-                queue_indices.insert(next, queue.len() - 1);
+                nodes.push(next);
+                nodes_indices.insert(next, nodes.len() - 1);
             }
+        }
+
+        // Run nodes to determine resource usage/build command queue
+        let mut resources = Resources {
+            node_index: 0,
+            resources: vec![],
+            resource_rev: BTreeMap::new(),
+            resource_accesses: Vec::from_iter(
+                std::iter::repeat(NodeResourceAccess {
+                    reads: Bitset::new(0),
+                    writes: Bitset::new(0),
+                })
+                .take(self.nodes.len()),
+            ),
+            virtual_buffers: VirtualBuffers::new(),
+            compute_pipelines: &self.pipelines.compute_pipelines,
+        };
+
+        // TODO: Pool these bits
+        let mut queue = vec![];
+        let mut bind_cache = BindGroupCache::new();
+        let mut resource_meta = FastHashMap::default();
+
+        for (index, node) in nodes
+            .iter()
+            .map(|&key| self.nodes.get(key).unwrap())
+            .enumerate()
+        {
+            resources.node_index = index;
+
+            let mut commands = RenderCommands {
+                pipelines: &self.pipelines,
+                queue: &mut queue,
+                bind_cache: &mut bind_cache,
+                resource_meta: &mut resource_meta,
+            };
+
+            (node.run_fn)(&mut commands, &mut resources)
         }
 
         // # Detect ambiguities
         // TODO: Make this optional since it's so expensive
+        // TODO: Either move this to run stage or move node runs to compile stage
         // Traverse the graph and build up bitsets of all dependencies
         let mut stack = vec![];
-        let all_dependencies: Vec<Bitset> = (0..queue.len())
+        let all_dependencies: Vec<Bitset> = (0..nodes.len())
             .into_iter()
             .map(|index| {
-                let mut bitset = Bitset::new(queue.len());
+                let mut bitset = Bitset::new(nodes.len());
                 stack.push(index);
                 while let Some(next) = stack.pop() {
                     if bitset.contains(next).unwrap() {
                         continue;
                     }
-                    bitset.insert(next).unwrap();
-                    for &dep in &dependencies[queue[next]] {
-                        stack.push(queue_indices[dep]);
+                    bitset.insert(next);
+                    for &dep in &dependencies[nodes[next]] {
+                        stack.push(nodes_indices[dep]);
                     }
                 }
                 bitset
@@ -176,18 +209,13 @@ impl RenderGraph {
             .collect();
 
         let mut ambiguities = vec![];
-        for index_a in 0..queue.len() {
+        for index_a in 0..nodes.len() {
             for index_b in all_dependencies[index_a].inverted().iter() {
                 if !all_dependencies[index_b].contains(index_a).unwrap() {
-                    let (a, b) = (
-                        self.nodes.get(queue[index_a]).unwrap(),
-                        self.nodes.get(queue[index_b]).unwrap(),
-                    );
-
-                    if a.conflicts_with(b) {
+                    if do_nodes_conflict(&resources, index_a, index_b) {
                         ambiguities.push((
-                            self.nodes.get_name(queue[index_a]).unwrap().to_string(),
-                            self.nodes.get_name(queue[index_b]).unwrap().to_string(),
+                            self.nodes.get_name(nodes[index_a]).unwrap().to_string(),
+                            self.nodes.get_name(nodes[index_b]).unwrap().to_string(),
                         ))
                     }
                 }
@@ -199,125 +227,40 @@ impl RenderGraph {
         }
 
         Ok(RenderGraphCompilation {
-            nodes: queue
-                .into_iter()
-                .map(|key| self.nodes.get(key).unwrap().clone())
-                .collect(),
-            resources: &mut self.resources,
+            graph: self,
+            queue,
+            bind_cache,
+            resource_meta,
         })
-    }
-
-    pub fn insert_compute_pipeline(
-        &mut self,
-        name: impl Into<Cow<'static, str>>,
-        pipeline: ReflectedComputePipeline,
-    ) -> ComputePipelineHandle {
-        self.resources.insert_compute_pipeline(name, pipeline)
-    }
-
-    pub fn insert_buffer(
-        &mut self,
-        name: impl Into<Cow<'static, str>>,
-        buffer: Buffer,
-    ) -> BufferHandle {
-        self.resources.insert_buffer(name, buffer)
-    }
-
-    pub fn get_buffer(&self, handle: BufferHandle) -> Option<&Buffer> {
-        self.resources.buffers.get(handle)
-    }
-
-    pub fn get_buffer_named(&mut self, name: &str) -> Option<&Buffer> {
-        self.resources
-            .virtual_buffers
-            .get_key(name)
-            .map(|handle| self.resources.buffers.get(handle).unwrap())
     }
 }
 
 #[derive(Debug)]
 pub struct RenderGraphCompilation<'g> {
-    nodes: Vec<RenderNodeMeta>,
-    resources: &'g mut RenderResources,
+    graph: &'g mut RenderGraph,
+    queue: Vec<RenderCommand>,
+    bind_cache: BindGroupCache,
+    resource_meta: FastHashMap<ResourceHandle, ResourceUse>,
 }
 
 impl RenderGraphCompilation<'_> {
-    pub fn run(&mut self, ctx: RenderContext) -> Result<(), RenderGraphError> {
-        // TODO: Pool these bits
-        let queue = &mut vec![];
-        let bind_cache = &mut BindGroupCache::new();
-        let resource_meta = &mut FastHashMap::default();
-
-        let mut provider = ResourceProvider::new();
-
-        let RenderCommandResources {
-            data_resources,
-            virtual_buffers,
-            compute_pipelines,
-            bind_group_layouts,
-            pipeline_layouts,
-        } = self.resources.split_for_render();
-
-        for (name, pipeline) in compute_pipelines.iter_names() {
-            provider.compute_pipelines.insert(name, pipeline);
-        }
-
-        for node in &self.nodes {
-            provider.buffer_reads.clear();
-            provider.buffer_writes.clear();
-
-            for read in &node.reads {
-                if let Some(&resource) = data_resources.get(&read[..]) {
-                    match resource {
-                        ResourceHandle::Buffer(handle) => {
-                            provider.buffer_reads.insert(&read[..], handle);
-                        }
-                    }
-                } else {
-                    // There's no retained/previously instantiated transient resource, so create a transient
-                    provider.transient_reads.insert(&read[..]);
-                }
-            }
-
-            for write in &node.writes {
-                if let Some(&resource) = data_resources.get(&write[..]) {
-                    match resource {
-                        ResourceHandle::Buffer(handle) => {
-                            provider.buffer_writes.insert(&write[..], handle);
-                        }
-                    }
-                } else {
-                    provider.transient_writes.insert(&write[..]);
-                }
-            }
-
-            let mut commands = RenderCommands {
-                resources: RenderCommandResources {
-                    data_resources,
-                    virtual_buffers,
-                    compute_pipelines,
-                    bind_group_layouts,
-                    pipeline_layouts,
-                },
-                queue,
-                bind_cache,
-                resource_meta,
-            };
-
-            (node.run_fn)(&mut commands, &provider)
-        }
-
+    pub fn run(
+        &mut self,
+        ctx: RenderContext,
+        res: &mut RenderResources,
+    ) -> Result<(), RenderGraphError> {
         // Make bind groups
-        bind_cache.create_groups(ctx, &mut self.resources, &resource_meta);
+        self.bind_cache
+            .create_groups(ctx, &mut self.graph.pipelines, res, &self.resource_meta);
 
         // Execute render command queue
         let mut encoder = ctx
             .device
             .create_command_encoder(&CommandEncoderDescriptor { label: None });
-        for command in queue.iter() {
+        for command in self.queue.iter() {
             match command {
                 RenderCommand::WriteBuffer(handle, offset, data) => {
-                    let buffer = self.resources.buffers.get(*handle).unwrap();
+                    let buffer = res.buffers.get(*handle).unwrap();
                     ctx.queue.write_buffer(&buffer, *offset, &data[..]);
                 }
                 RenderCommand::ComputePass(label, commands) => {
@@ -328,11 +271,11 @@ impl RenderGraphCompilation<'_> {
                         match command {
                             ComputePassCommand::SetPipeline(handle) => {
                                 let pipeline =
-                                    self.resources.compute_pipelines.get(*handle).unwrap();
+                                    self.graph.pipelines.compute_pipelines.get(*handle).unwrap();
                                 pass.set_pipeline(&pipeline.wgpu);
                             }
                             ComputePassCommand::BindGroup(index, handle) => {
-                                let group = self.resources.bind_groups.get(*handle).unwrap();
+                                let group = self.graph.pipelines.bind_groups.get(*handle).unwrap();
                                 // TODO: Still haven't looked at dynamic offsets
                                 pass.set_bind_group(*index, group, &[]);
                             }
@@ -343,8 +286,8 @@ impl RenderGraphCompilation<'_> {
                     }
                 }
                 &RenderCommand::CopyBufferToBuffer(src, src_off, dst, dst_off, size) => {
-                    let src = self.resources.buffers.get(src).unwrap();
-                    let dst = self.resources.buffers.get(dst).unwrap();
+                    let src = res.buffers.get(src).unwrap();
+                    let dst = res.buffers.get(dst).unwrap();
                     encoder.copy_buffer_to_buffer(&src, src_off, &dst, dst_off, size);
                 }
             }
@@ -353,5 +296,19 @@ impl RenderGraphCompilation<'_> {
         ctx.queue.submit([commandbuffer]);
 
         Ok(())
+    }
+}
+
+fn do_nodes_conflict(res: &Resources, left: usize, right: usize) -> bool {
+    let (left, right) = (&res.resource_accesses[left], &res.resource_accesses[right]);
+
+    if left.reads.intersects_with(&right.writes) {
+        true
+    } else if right.reads.intersects_with(&left.writes) {
+        true
+    } else if left.writes.intersects_with(&right.writes) {
+        true
+    } else {
+        false
     }
 }
