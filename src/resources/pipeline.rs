@@ -25,7 +25,6 @@ pub(crate) type PipelineLayouts = SlotMap<PipelineLayoutHandle, PipelineLayout>;
 #[derive(Debug)]
 pub struct PipelineStorage {
     pub(crate) compute_pipelines: ComputePipelines,
-    pub(crate) bind_groups: BindGroups,
     pub(crate) bind_group_layouts: BindGroupLayouts,
     pub(crate) pipeline_layouts: PipelineLayouts,
 }
@@ -34,7 +33,6 @@ impl PipelineStorage {
     pub fn new() -> Self {
         Self {
             compute_pipelines: NamedSlotMap::new(),
-            bind_groups: SecondaryMap::new(),
             bind_group_layouts: SlotMap::with_key(),
             pipeline_layouts: SlotMap::with_key(),
         }

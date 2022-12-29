@@ -249,8 +249,9 @@ impl RenderGraphCompilation<'_> {
         res: &mut RenderResources,
     ) -> Result<(), RenderGraphError> {
         // Make bind groups
-        self.bind_cache
-            .create_groups(ctx, &mut self.graph.pipelines, res, &self.resource_meta);
+        let bind_groups =
+            self.bind_cache
+                .create_groups(ctx, &mut self.graph.pipelines, res, &self.resource_meta);
 
         // Execute render command queue
         let mut encoder = ctx
@@ -274,7 +275,7 @@ impl RenderGraphCompilation<'_> {
                                 pass.set_pipeline(&pipeline.wgpu);
                             }
                             ComputePassCommand::BindGroup(index, handle) => {
-                                let group = self.graph.pipelines.bind_groups.get(*handle).unwrap();
+                                let group = bind_groups.get(*handle).unwrap();
                                 // TODO: Still haven't looked at dynamic offsets
                                 pass.set_bind_group(*index, group, &[]);
                             }

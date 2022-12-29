@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
 use naga::FastHashMap;
-use slotmap::{new_key_type, SlotMap};
+use slotmap::{new_key_type, SecondaryMap, SlotMap};
 use wgpu::{BindGroupDescriptor, BindGroupEntry, BindingResource, BufferBinding};
 
 use crate::RenderContext;
 
 use super::buffer::BufferUse;
-use super::pipeline::PipelineStorage;
+use super::pipeline::{BindGroups, PipelineStorage};
 use super::{BindGroupLayoutHandle, BufferHandle, RenderResources, ResourceHandle, ResourceUse};
 
 new_key_type! { pub(crate) struct BindGroupHandle; }
@@ -54,11 +54,11 @@ impl BindGroupCache {
     pub fn create_groups(
         &self,
         context: RenderContext,
-        pipelines: &mut PipelineStorage,
+        pipelines: &PipelineStorage,
         resources: &RenderResources,
         meta: &FastHashMap<ResourceHandle, ResourceUse>,
-    ) {
-        pipelines.bind_groups.set_capacity(self.groups.len());
+    ) -> BindGroups {
+        let mut bind_groups = BindGroups::with_capacity(self.groups.len());
         for (handle, (layout, bindings)) in &self.groups {
             let layout = pipelines
                 .bind_group_layouts
@@ -102,8 +102,9 @@ impl BindGroupCache {
                 entries: &entries,
             });
 
-            pipelines.bind_groups.insert(handle, bind_group);
+            bind_groups.insert(handle, bind_group);
         }
+        bind_groups
     }
 }
 
