@@ -10,6 +10,8 @@ use thiserror::Error;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use wgpu::{Adapter, BufferDescriptor, BufferUsages, Device, Instance, Label, MapMode, Queue};
 
+use crate::resources::{PipelineStorage, RenderResources};
+
 mod bitset;
 mod commands;
 mod graph;
@@ -99,21 +101,10 @@ impl RenderNode for ComputeLevels {
         "compute_levels".into()
     }
 
-    fn reads() -> Vec<NodeInput> {
-        vec![NodeInput::new("ascii_buffer")]
-    }
-
-    fn writes() -> Vec<NodeOutput> {
-        vec![
-            // NodeOutput::buffer("levels"),
-            NodeOutput::new("ascii_buffer"),
-        ]
-    }
-
     fn run(commands: &mut RenderCommands, res: &mut Resources) {
-        // let ascii = res.write_buffer("ascii_buffer");
+        let ascii = res.write_buffer("ascii_buffer");
 
-        // commands.write_buffer(ascii, 0, &[0xDE, 0xAD, 0xBE, 0xEF]);
+        commands.write_buffer(ascii, 0, &[0xDE, 0xAD, 0xBE, 0xEF]);
 
         // commands
         //     .compute_pass(Some("pass"))
@@ -130,22 +121,14 @@ impl RenderNode for CopyToStaging {
         "copy_to_staging".into()
     }
 
-    fn reads() -> Vec<NodeInput> {
-        vec![NodeInput::new("ascii_buffer"), NodeInput::new("staging")]
-    }
-
-    fn writes() -> Vec<NodeOutput> {
-        vec![NodeOutput::new("staging")]
-    }
-
     fn after() -> Vec<Cow<'static, str>> {
         vec![ComputeLevels::name()]
     }
 
     fn run(commands: &mut RenderCommands, res: &mut Resources) {
         let buffer = res.read_buffer("ascii_buffer");
-        // let staging = res.write_buffer("staging");
-        // commands.copy_buffer_to_buffer(buffer, 0, staging, 0, 4);
+        let staging = res.write_buffer("staging");
+        commands.copy_buffer_to_buffer(buffer, 0, staging, 0, 4);
     }
 }
 
@@ -198,20 +181,23 @@ fn test() {
         .unwrap();
 
     let mut graph = RenderGraph::new();
-
-    // graph.insert_buffer("ascii_buffer", ascii_buffer);
-    // graph.insert_buffer("staging", staging);
-    // graph.insert_compute_pipeline("compute_levels", pipeline);
-
     graph.add_node::<ComputeLevels>();
     graph.add_node::<CopyToStaging>();
-    println!("{graph:#?}");
-    let mut comp = graph.compile(ctx).unwrap();
-    // comp.run(ctx).unwrap();
 
-    // let staging = graph.get_buffer_named("staging").unwrap();
-    // let slice = staging.slice(0..4);
-    // slice.map_async(MapMode::Read, |_| ());
-    // ctx.device.poll(wgpu::MaintainBase::Wait);
-    // println!("New bytes: {:?}", &slice.get_mapped_range()[..]);
+    let mut resources = RenderResources::new();
+    resources.insert_buffer("ascii_buffer", ascii_buffer);
+    resources.insert_buffer("staging", staging);
+
+    let mut pipelines = PipelineStorage::new();
+    pipelines.insert_compute_pipeline("compute_levels", pipeline);
+
+    println!("{graph:#?}");
+    let mut comp = graph.compile(ctx, &pipelines).unwrap();
+    comp.run(ctx, &resources).unwrap();
+
+    let staging = resources.get_buffer("staging").unwrap();
+    let slice = staging.slice(0..4);
+    slice.map_async(MapMode::Read, |_| ());
+    ctx.device.poll(wgpu::MaintainBase::Wait);
+    println!("New bytes: {:?}", &slice.get_mapped_range()[..]);
 }
