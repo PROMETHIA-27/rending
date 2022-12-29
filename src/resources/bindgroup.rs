@@ -20,7 +20,6 @@ new_key_type! { pub(crate) struct BindGroupHandle; }
 
 #[derive(Debug)]
 pub(crate) struct BindGroupCache {
-    // TODO: Does reverse need bindgrouplayouthandle too?
     groups: SlotMap<BindGroupHandle, (BindGroupLayoutHandle, Vec<(u32, ResourceBinding)>)>,
     reverse: BTreeMap<Vec<(u32, ResourceBinding)>, BindGroupHandle>,
 }

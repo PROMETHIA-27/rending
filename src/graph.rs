@@ -35,7 +35,6 @@ pub struct RenderGraph {
     nodes: NamedSlotMap<NodeKey, RenderNodeMeta>,
 }
 
-// TODO: What is the lifetime of bind groups?
 impl RenderGraph {
     pub fn new() -> Self {
         Self {
@@ -46,8 +45,8 @@ impl RenderGraph {
     pub fn add_node<T: RenderNode>(&mut self) {
         let meta = RenderNodeMeta {
             // Vec::into_iter is used over .into_iter so that this errors if I change the functions to not be Vec
-            before: OrderingList::Names(Vec::into_iter(T::before()).collect()),
-            after: OrderingList::Names(Vec::into_iter(T::after()).collect()),
+            before: Vec::into_iter(T::before()).collect(),
+            after: Vec::into_iter(T::after()).collect(),
             run_fn: T::run,
             type_name: Some(std::any::type_name::<T>()),
         };
@@ -67,32 +66,22 @@ impl RenderGraph {
 
         for (key, node) in self.nodes.iter_key_value() {
             // Gather explicit ordering constraints, converted to `after`
-            match &node.before {
-                OrderingList::Names(names) => {
-                    names
-                        .iter()
-                        .filter_map(|name| self.nodes.get_key(&name[..]))
-                        .for_each(|dependent_key| {
-                            dependencies
-                                .entry(dependent_key)
-                                .unwrap()
-                                .or_default()
-                                .push(key);
-                        });
-                }
-                _ => panic!(), // TODO: Remove OrderingList variants!
-            }
+            node.before
+                .iter()
+                .filter_map(|name| self.nodes.get_key(&name[..]))
+                .for_each(|dependent_key| {
+                    dependencies
+                        .entry(dependent_key)
+                        .unwrap()
+                        .or_default()
+                        .push(key);
+                });
 
-            match &node.after {
-                OrderingList::Names(names) => {
-                    dependencies.entry(key).unwrap().or_default().extend(
-                        names
-                            .iter()
-                            .filter_map(|name| self.nodes.get_key(&name[..])),
-                    );
-                }
-                _ => panic!(),
-            }
+            dependencies.entry(key).unwrap().or_default().extend(
+                node.after
+                    .iter()
+                    .filter_map(|name| self.nodes.get_key(&name[..])),
+            );
         }
 
         // Topological sort the nodes into a linear order for execution, taking into account

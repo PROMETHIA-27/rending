@@ -34,23 +34,6 @@ impl NodeInput {
             resource: resource.into(),
         }
     }
-
-    // pub fn retained(resource: impl Into<Cow<'static, str>>) -> Self {
-    //     Self {
-    //         resource: resource.into(),
-    //         source: ResourceSource::Retained,
-    //     }
-    // }
-
-    // pub fn node(
-    //     resource: impl Into<Cow<'static, str>>,
-    //     node: impl Into<Cow<'static, str>>,
-    // ) -> Self {
-    //     Self {
-    //         resource: resource.into(),
-    //         source: ResourceSource::Node(node.into()),
-    //     }
-    // }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -66,41 +49,7 @@ impl NodeOutput {
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) enum OrderingList {
-    Names(FastHashSet<Cow<'static, str>>),
-    Keys(FastHashSet<NodeKey>),
-}
-
-impl OrderingList {
-    pub fn is_names(&self) -> bool {
-        match self {
-            OrderingList::Names(_) => true,
-            OrderingList::Keys(_) => false,
-        }
-    }
-
-    pub fn is_keys(&self) -> bool {
-        match self {
-            OrderingList::Names(_) => false,
-            OrderingList::Keys(_) => true,
-        }
-    }
-
-    pub fn unwrap_keys(&self) -> &FastHashSet<NodeKey> {
-        match self {
-            OrderingList::Keys(keys) => keys,
-            _ => panic!("unwrapped names"),
-        }
-    }
-
-    pub fn unwrap_keys_mut(&mut self) -> &mut FastHashSet<NodeKey> {
-        match self {
-            OrderingList::Keys(keys) => keys,
-            _ => panic!("unwrapped names"),
-        }
-    }
-}
+pub(crate) type OrderingList = FastHashSet<Cow<'static, str>>;
 
 #[derive(Clone)]
 pub struct RenderNodeMeta {
