@@ -1,15 +1,16 @@
 use std::borrow::{Borrow, Cow};
 use std::collections::BTreeMap;
 
+use naga::Handle;
 use wgpu::{Buffer, BufferUsages};
 
 use crate::bitset::Bitset;
-use crate::commands::ReadBuffer;
+use crate::commands::{ReadBuffer, WriteBuffer};
 use crate::named_slotmap::NamedSlotMap;
 
 pub(crate) use self::bindgroup::{BindGroupCache, BindGroupHandle, ResourceBinding};
 pub use self::buffer::BufferHandle;
-pub(crate) use self::buffer::{BufferUse, VirtualBuffer};
+pub(crate) use self::buffer::{BufferBinding, BufferBindings, BufferUse, VirtualBuffer};
 pub use self::layout::BindGroupLayout;
 pub use self::layout::{BindGroupLayoutHandle, PipelineLayout, PipelineLayoutHandle};
 pub use self::module::ShaderModule;
@@ -22,38 +23,27 @@ mod layout;
 mod module;
 mod pipeline;
 
-pub(crate) type DataResources = BTreeMap<Cow<'static, str>, ResourceHandle>;
 pub(crate) type Buffers = BTreeMap<Cow<'static, str>, Buffer>;
 
 #[derive(Debug)]
 pub struct RenderResources {
-    // TODO: Consider whether resources should be stored in a different slotmap type. Probably not.
-    pub(crate) data_resources: DataResources,
     pub(crate) buffers: Buffers,
 }
 
 impl RenderResources {
     pub fn new() -> Self {
         Self {
-            data_resources: DataResources::new(),
             buffers: Buffers::new(),
         }
     }
 
-    // pub fn insert_buffer(
-    //     &mut self,
-    //     name: impl Into<Cow<'static, str>>,
-    //     buffer: Buffer,
-    // ) -> BufferHandle {
-    //     let name: Cow<str> = name.into();
-    //     let handle = self
-    //         .virtual_buffers
-    //         .insert(name.clone(), VirtualBuffer { retained: true });
-    //     self.buffers.insert(handle, buffer);
-    //     self.data_resources
-    //         .insert(name, ResourceHandle::Buffer(handle));
-    //     handle
-    // }
+    pub fn insert_buffer(&mut self, name: impl Into<Cow<'static, str>>, buffer: Buffer) {
+        self.buffers.insert(name.into(), buffer);
+    }
+
+    pub fn get_buffer(&self, name: &str) -> Option<&Buffer> {
+        self.buffers.get(name)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -112,10 +102,7 @@ pub struct Resources<'s> {
 }
 
 impl Resources<'_> {
-    pub fn read_buffer(
-        &mut self,
-        name: impl Into<Cow<'static, str>> + Borrow<str> + Clone,
-    ) -> ReadBuffer {
+    pub fn read_buffer(&mut self, name: impl Into<Cow<'static, str>> + Borrow<str>) -> ReadBuffer {
         match self.resource_rev.get(name.borrow()) {
             Some(&(index, handle)) => match handle {
                 ResourceHandle::Buffer(handle) => {
@@ -127,37 +114,44 @@ impl Resources<'_> {
                   */
             },
             None => {
-                let handle = self
-                    .virtual_buffers
-                    .insert(name.clone().into(), VirtualBuffer);
+                let name = name.into();
+                let handle = self.virtual_buffers.insert(name.clone(), VirtualBuffer);
                 let index = self.resources.len();
                 self.resources
-                    .push((name.clone().into(), ResourceHandle::Buffer(handle)));
+                    .push((name.clone(), ResourceHandle::Buffer(handle)));
                 self.resource_rev
-                    .insert(name.into(), (index, ResourceHandle::Buffer(handle)));
+                    .insert(name, (index, ResourceHandle::Buffer(handle)));
                 self.resource_accesses[self.node_index].reads.insert(index);
                 ReadBuffer(handle)
             }
         }
     }
 
-    // pub fn write_buffer(&mut self, name: &str) -> WriteBuffer {
-    //     WriteBuffer(
-    //         self.buffer_writes
-    //             .get(name)
-    //             .copied()
-    //             .or_else(|| {
-    //                 self.transient_writes.contains(name).then(|| {
-    //                     let handle = self
-    //                         .virtual_buffers
-    //                         .insert(name, VirtualBuffer { retained: false });
-    //                     self.buffer_writes.insert(name, handle);
-    //                     handle
-    //                 })
-    //             })
-    //             .unwrap_or_else(|| panic!("no buffer named `{name}` available")),
-    //     )
-    // }
+    pub fn write_buffer(
+        &mut self,
+        name: impl Into<Cow<'static, str>> + Borrow<str>,
+    ) -> WriteBuffer {
+        match self.resource_rev.get(name.borrow()) {
+            Some(&(index, handle)) => match handle {
+                ResourceHandle::Buffer(handle) => {
+                    let accesses = &mut self.resource_accesses[self.node_index];
+                    accesses.writes.insert(index);
+                    WriteBuffer(handle)
+                }
+            },
+            None => {
+                let name = name.into();
+                let handle = self.virtual_buffers.insert(name.clone(), VirtualBuffer);
+                let index = self.resources.len();
+                self.resources
+                    .push((name.clone(), ResourceHandle::Buffer(handle)));
+                self.resource_rev
+                    .insert(name, (index, ResourceHandle::Buffer(handle)));
+                self.resource_accesses[self.node_index].writes.insert(index);
+                WriteBuffer(handle)
+            }
+        }
+    }
 
     // pub fn readwrite_buffer(&mut self, name: &str) -> ReadWriteBuffer {
     //     let &buffer = self
