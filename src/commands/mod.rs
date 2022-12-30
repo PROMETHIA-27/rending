@@ -105,8 +105,20 @@ impl<'q, 'r> RenderCommands<'q, 'r> {
                 let name = name.into();
                 let index = self.resources.len();
                 let handle = self.virtual_buffers.insert(name.clone(), index);
-                self.resources
-                    .push((name.clone(), ResourceHandle::Buffer(handle)));
+                self.resources.push((name, handle.into()));
+                handle
+            }
+        }
+    }
+
+    pub fn texture(&mut self, name: impl Into<Cow<'static, str>> + Borrow<str>) -> TextureHandle {
+        match self.virtual_textures.get_key(name.borrow()) {
+            Some(handle) => handle,
+            None => {
+                let name = name.into();
+                let index = self.resources.len();
+                let handle = self.virtual_textures.insert(name.clone(), index);
+                self.resources.push((name, handle.into()));
                 handle
             }
         }
