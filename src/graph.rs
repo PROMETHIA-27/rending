@@ -1,7 +1,10 @@
 use naga::{FastHashMap, FastHashSet};
 use slotmap::SecondaryMap;
 use thiserror::Error;
-use wgpu::{BufferDescriptor, BufferUsages, CommandEncoderDescriptor, ComputePassDescriptor};
+use wgpu::{
+    BufferDescriptor, BufferUsages, CommandEncoderDescriptor, ComputePassDescriptor,
+    TextureDescriptor,
+};
 
 use crate::bitset::Bitset;
 use crate::commands::{ComputePassCommand, RenderCommand, RenderCommands};
@@ -10,7 +13,7 @@ use crate::node::{NodeKey, OrderingList, RenderNode, RenderNodeMeta};
 use crate::resources::{
     BindGroupCache, BufferBinding, BufferBindings, NodeResourceAccess, PipelineStorage,
     RenderResources, ResourceAccesses, ResourceHandle, ResourceList, ResourceRev, ResourceUse,
-    Resources, VirtualBuffers,
+    Resources, TextureBinding, TextureBindings, VirtualBuffers, VirtualTextures,
 };
 use crate::RenderContext;
 
@@ -135,6 +138,7 @@ impl RenderGraph {
                 std::iter::repeat(NodeResourceAccess::new()).take(self.nodes.len()),
             ),
             virtual_buffers: VirtualBuffers::new(),
+            virtual_textures: VirtualTextures::new(),
             compute_pipelines: &pipelines.compute_pipelines,
         };
 
@@ -207,6 +211,7 @@ impl RenderGraph {
             bind_cache,
             resource_meta,
             virtual_buffers: resources.virtual_buffers,
+            virtual_textures: resources.virtual_textures,
         })
     }
 }
@@ -219,6 +224,7 @@ pub struct RenderGraphCompilation<'g> {
     bind_cache: BindGroupCache,
     resource_meta: FastHashMap<ResourceHandle, ResourceUse>,
     virtual_buffers: VirtualBuffers,
+    virtual_textures: VirtualTextures,
 }
 
 impl RenderGraphCompilation<'_> {
@@ -238,6 +244,7 @@ impl RenderGraphCompilation<'_> {
                             usage,
                             mapped,
                         } => (size, usage, mapped),
+                        _ => None?,
                     };
 
                 // Bind retained resources
@@ -266,12 +273,52 @@ impl RenderGraphCompilation<'_> {
             })
             .collect::<Result<BufferBindings, RenderGraphError>>()?;
 
+        let bound_textures: TextureBindings = self
+            .virtual_textures
+            .iter_names()
+            .filter_map(|(name, handle)| {
+                let (size, mips, samples, format, usage) = match self
+                    .resource_meta
+                    .get_mut(&ResourceHandle::Texture(handle))?
+                {
+                    ResourceUse::Texture {
+                        size,
+                        mip_level_count,
+                        sample_count,
+                        format,
+                        usage,
+                    } => (size, mip_level_count, sample_count, format, usage),
+                    _ => None?,
+                };
+
+                // Bind retained resources
+                if let Some(texture) = res.textures.get(name) {
+                    Some(Ok((handle, TextureBinding::Retained(texture))))
+                }
+                // Create transients
+                else {
+                    let (dimensions, size) = size.into_wgpu();
+                    let texture = ctx.device.create_texture(&TextureDescriptor {
+                        label: None,
+                        size,
+                        mip_level_count: *mips,
+                        sample_count: *samples,
+                        dimension: dimensions,
+                        format: *format,
+                        usage: *usage,
+                    });
+                    Some(Ok((handle, TextureBinding::Transient(texture))))
+                }
+            })
+            .collect::<Result<TextureBindings, RenderGraphError>>()?;
+
         // Make bind groups
         let bind_groups = self.bind_cache.create_groups(
             ctx,
             &self.pipelines,
             res,
             &bound_buffers,
+            &bound_textures,
             &self.resource_meta,
         );
 
