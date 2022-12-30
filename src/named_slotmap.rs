@@ -45,11 +45,20 @@ impl<K: Key, V> NamedSlotMap<K, V> {
         self.slotmap.get(key)
     }
 
+    /// Get the name of the value assigned to a given key.
+    ///
+    /// **WARNING**: This is an expensive function. This should only be used on cold paths, such as errors and such.
     pub fn get_name(&self, key: K) -> Option<&str> {
         self.names
             .iter()
             .find(|(_, &k)| k == key)
             .map(|(name, _)| &name[..])
+    }
+
+    pub fn get_key_value(&self, name: &str) -> Option<(K, &V)> {
+        let &handle = self.names.get(name)?;
+        let value = self.slotmap.get(handle)?;
+        Some((handle, value))
     }
 
     pub fn iter_key_value(&self) -> impl Iterator<Item = (K, &V)> {
