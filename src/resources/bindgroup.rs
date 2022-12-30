@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 
 use naga::FastHashMap;
 use slotmap::{new_key_type, SecondaryMap, SlotMap};
-use wgpu::{BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, BufferBinding};
+use wgpu::{
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, BufferBinding, Texture,
+};
 
 use crate::RenderContext;
 
@@ -11,7 +13,7 @@ use super::buffer::BufferUse;
 use super::pipeline::PipelineStorage;
 use super::{
     BindGroupLayoutHandle, BufferBindings, BufferHandle, RenderResources, ResourceHandle,
-    ResourceUse,
+    ResourceUse, TextureBindings, TextureHandle, TextureViewDimension,
 };
 
 pub(crate) type BindGroups = SecondaryMap<BindGroupHandle, BindGroup>;
@@ -61,6 +63,7 @@ impl BindGroupCache {
         pipelines: &PipelineStorage,
         resources: &RenderResources,
         bound_buffers: &BufferBindings,
+        bound_textures: &TextureBindings,
         meta: &FastHashMap<ResourceHandle, ResourceUse>,
     ) -> BindGroups {
         let mut bind_groups = BindGroups::with_capacity(self.groups.len());
@@ -121,12 +124,21 @@ pub enum ResourceBinding {
         size: Option<NonZeroU64>,
         usage: BufferUse,
     },
+    Texture {
+        handle: TextureHandle,
+        dimensions: TextureViewDimension,
+        base_mip: u32,
+        mip_count: Option<NonZeroU32>,
+        base_layer: u32,
+        layer_count: Option<NonZeroU32>,
+    },
 }
 
 impl ResourceBinding {
     pub(crate) fn handle(&self) -> ResourceHandle {
         match self {
             &ResourceBinding::Buffer { handle, .. } => ResourceHandle::Buffer(handle),
+            &ResourceBinding::Texture { handle, .. } => ResourceHandle::Texture(handle),
         }
     }
 
