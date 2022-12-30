@@ -76,6 +76,12 @@ impl From<BufferHandle> for ResourceHandle {
     }
 }
 
+impl From<TextureHandle> for ResourceHandle {
+    fn from(handle: TextureHandle) -> Self {
+        Self::Texture(handle)
+    }
+}
+
 bitflags::bitflags! {
     pub struct RWMode : u8 {
         const READ = 0b01;
