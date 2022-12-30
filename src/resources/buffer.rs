@@ -126,9 +126,6 @@ impl BufferUse {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct VirtualBuffer;
-
 pub(crate) enum BufferBinding<'b> {
     Retained(&'b Buffer),
     Transient(Buffer),
