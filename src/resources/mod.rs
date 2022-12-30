@@ -1,7 +1,9 @@
 use std::borrow::{Borrow, Cow};
 use std::collections::BTreeMap;
 
-use wgpu::{Buffer, BufferUsages};
+use wgpu::{
+    Buffer, BufferUsages, Extent3d, Texture, TextureDimension, TextureFormat, TextureUsages,
+};
 
 use crate::bitset::Bitset;
 use crate::commands::{ReadBuffer, WriteBuffer};
@@ -15,6 +17,10 @@ pub use self::layout::{BindGroupLayoutHandle, PipelineLayout, PipelineLayoutHand
 pub use self::module::ShaderModule;
 use self::pipeline::ComputePipelines;
 pub use self::pipeline::{ComputePipeline, ComputePipelineHandle, PipelineStorage};
+pub(crate) use self::texture::{
+    TextureBinding, TextureBindings, TextureHandle, TextureViewDimension,
+};
+use self::texture::{TextureSize, VirtualTexture};
 
 mod bindgroup;
 mod buffer;
@@ -24,16 +30,19 @@ mod pipeline;
 mod texture;
 
 pub(crate) type Buffers = BTreeMap<Cow<'static, str>, Buffer>;
+pub(crate) type Textures = BTreeMap<Cow<'static, str>, Texture>;
 
 #[derive(Debug)]
 pub struct RenderResources {
     pub(crate) buffers: Buffers,
+    pub(crate) textures: Textures,
 }
 
 impl RenderResources {
     pub fn new() -> Self {
         Self {
             buffers: Buffers::new(),
+            textures: Textures::new(),
         }
     }
 
@@ -43,6 +52,10 @@ impl RenderResources {
 
     pub fn get_buffer(&self, name: &str) -> Option<&Buffer> {
         self.buffers.get(name)
+    }
+
+    pub fn insert_texture(&mut self, name: impl Into<Cow<'static, str>>, texture: Texture) {
+        self.textures.insert(name.into(), texture);
     }
 }
 
@@ -55,6 +68,7 @@ pub enum ResourceType {
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ResourceHandle {
     Buffer(BufferHandle),
+    Texture(TextureHandle),
 }
 
 impl From<BufferHandle> for ResourceHandle {
@@ -90,6 +104,7 @@ pub(crate) type ResourceList = Vec<(Cow<'static, str>, ResourceHandle)>;
 pub(crate) type ResourceRev = BTreeMap<Cow<'static, str>, (usize, ResourceHandle)>;
 pub(crate) type ResourceAccesses = Vec<NodeResourceAccess>;
 pub(crate) type VirtualBuffers = NamedSlotMap<BufferHandle, VirtualBuffer>;
+pub(crate) type VirtualTextures = NamedSlotMap<TextureHandle, VirtualTexture>;
 
 #[derive(Debug)]
 pub struct Resources<'s> {
@@ -98,6 +113,7 @@ pub struct Resources<'s> {
     pub(crate) resource_rev: ResourceRev,
     pub(crate) resource_accesses: ResourceAccesses,
     pub(crate) virtual_buffers: VirtualBuffers,
+    pub(crate) virtual_textures: VirtualTextures,
     pub(crate) compute_pipelines: &'s ComputePipelines,
 }
 
@@ -109,9 +125,8 @@ impl Resources<'_> {
                     let accesses = &mut self.resource_accesses[self.node_index];
                     accesses.reads.insert(index);
                     ReadBuffer(handle)
-                } /*
-                  TODO: Fail for textures
-                  */
+                }
+                _ => panic!("attempted to read non-buffer resource as a buffer"),
             },
             None => {
                 let name = name.into();
@@ -138,6 +153,7 @@ impl Resources<'_> {
                     accesses.writes.insert(index);
                     WriteBuffer(handle)
                 }
+                _ => panic!("attempted to read non-buffer resource as a buffer"),
             },
             None => {
                 let name = name.into();
@@ -177,6 +193,13 @@ pub enum ResourceUse {
         usage: BufferUsages,
         mapped: bool,
     },
+    Texture {
+        size: TextureSize,
+        mip_level_count: u32,
+        sample_count: u32,
+        format: TextureFormat,
+        usage: TextureUsages,
+    },
 }
 
 impl ResourceUse {
@@ -186,6 +209,13 @@ impl ResourceUse {
                 size: 0,
                 usage: BufferUsages::empty(),
                 mapped: false,
+            },
+            ResourceHandle::Texture(_) => ResourceUse::Texture {
+                size: TextureSize::D1 { x: 0 },
+                mip_level_count: 1,
+                sample_count: 1,
+                format: TextureFormat::Rgba32Float,
+                usage: TextureUsages::empty(),
             },
         }
     }
