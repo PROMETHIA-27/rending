@@ -3,9 +3,6 @@ use wgpu::{Extent3d, Texture, TextureDimension};
 
 new_key_type! { pub struct TextureHandle; }
 
-#[derive(Debug)]
-pub(crate) struct VirtualTexture;
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TextureViewDimension {
     D1,

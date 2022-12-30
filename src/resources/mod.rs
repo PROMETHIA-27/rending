@@ -6,21 +6,20 @@ use wgpu::{
 };
 
 use crate::bitset::Bitset;
-use crate::commands::{ReadBuffer, WriteBuffer};
 use crate::named_slotmap::NamedSlotMap;
 
 pub(crate) use self::bindgroup::{BindGroupCache, BindGroupHandle, ResourceBinding};
-pub(crate) use self::buffer::{BufferBinding, BufferBindings, BufferUse, VirtualBuffer};
+pub(crate) use self::buffer::{BufferBinding, BufferBindings, BufferUse};
 pub use self::buffer::{BufferHandle, BufferSlice};
 pub use self::layout::BindGroupLayout;
 pub use self::layout::{BindGroupLayoutHandle, PipelineLayout, PipelineLayoutHandle};
 pub use self::module::ShaderModule;
 use self::pipeline::ComputePipelines;
 pub use self::pipeline::{ComputePipeline, ComputePipelineHandle, PipelineStorage};
+use self::texture::TextureSize;
 pub(crate) use self::texture::{
     TextureBinding, TextureBindings, TextureHandle, TextureViewDimension,
 };
-use self::texture::{TextureSize, VirtualTexture};
 
 mod bindgroup;
 mod buffer;
@@ -97,92 +96,6 @@ impl NodeResourceAccess {
             reads: Bitset::new(0),
             writes: Bitset::new(0),
         }
-    }
-}
-
-pub(crate) type ResourceList = Vec<(Cow<'static, str>, ResourceHandle)>;
-pub(crate) type ResourceRev = BTreeMap<Cow<'static, str>, (usize, ResourceHandle)>;
-pub(crate) type ResourceAccesses = Vec<NodeResourceAccess>;
-pub(crate) type VirtualBuffers = NamedSlotMap<BufferHandle, VirtualBuffer>;
-pub(crate) type VirtualTextures = NamedSlotMap<TextureHandle, VirtualTexture>;
-
-#[derive(Debug)]
-pub struct Resources<'s> {
-    pub(crate) node_index: usize,
-    pub(crate) resources: ResourceList,
-    pub(crate) resource_rev: ResourceRev,
-    pub(crate) resource_accesses: ResourceAccesses,
-    pub(crate) virtual_buffers: VirtualBuffers,
-    pub(crate) virtual_textures: VirtualTextures,
-    pub(crate) compute_pipelines: &'s ComputePipelines,
-}
-
-impl Resources<'_> {
-    pub fn read_buffer(&mut self, name: impl Into<Cow<'static, str>> + Borrow<str>) -> ReadBuffer {
-        match self.resource_rev.get(name.borrow()) {
-            Some(&(index, handle)) => match handle {
-                ResourceHandle::Buffer(handle) => {
-                    let accesses = &mut self.resource_accesses[self.node_index];
-                    accesses.reads.insert(index);
-                    ReadBuffer(handle)
-                }
-                _ => panic!("attempted to read non-buffer resource as a buffer"),
-            },
-            None => {
-                let name = name.into();
-                let handle = self.virtual_buffers.insert(name.clone(), VirtualBuffer);
-                let index = self.resources.len();
-                self.resources
-                    .push((name.clone(), ResourceHandle::Buffer(handle)));
-                self.resource_rev
-                    .insert(name, (index, ResourceHandle::Buffer(handle)));
-                self.resource_accesses[self.node_index].reads.insert(index);
-                ReadBuffer(handle)
-            }
-        }
-    }
-
-    pub fn write_buffer(
-        &mut self,
-        name: impl Into<Cow<'static, str>> + Borrow<str>,
-    ) -> WriteBuffer {
-        match self.resource_rev.get(name.borrow()) {
-            Some(&(index, handle)) => match handle {
-                ResourceHandle::Buffer(handle) => {
-                    let accesses = &mut self.resource_accesses[self.node_index];
-                    accesses.writes.insert(index);
-                    WriteBuffer(handle)
-                }
-                _ => panic!("attempted to read non-buffer resource as a buffer"),
-            },
-            None => {
-                let name = name.into();
-                let handle = self.virtual_buffers.insert(name.clone(), VirtualBuffer);
-                let index = self.resources.len();
-                self.resources
-                    .push((name.clone(), ResourceHandle::Buffer(handle)));
-                self.resource_rev
-                    .insert(name, (index, ResourceHandle::Buffer(handle)));
-                self.resource_accesses[self.node_index].writes.insert(index);
-                WriteBuffer(handle)
-            }
-        }
-    }
-
-    // pub fn readwrite_buffer(&mut self, name: &str) -> ReadWriteBuffer {
-    //     let &buffer = self
-    //         .buffer_reads
-    //         .contains_key(name)
-    //         .then(|| self.buffer_writes.get(name))
-    //         .flatten()
-    //         .unwrap_or_else(|| panic!("no inout buffer named {name} available"));
-    //     ReadWriteBuffer(buffer)
-    // }
-
-    pub fn compute_pipeline(&self, name: &str) -> ComputePipelineHandle {
-        self.compute_pipelines
-            .get_key(name)
-            .unwrap_or_else(|| panic!("no compute pipeline named `{name}` available"))
     }
 }
 

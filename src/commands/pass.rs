@@ -81,8 +81,6 @@ impl ComputePassCommands<'_, '_, '_> {
                 .get(layout.groups[group_index as usize])
                 .unwrap();
 
-            // TODO: Test that input buffers can only be read from and output can only be written to now
-            // TODO: Figure out what the above todo means i forgor :(
             for &(binding, resource) in binding.iter() {
                 let uses = commands
                     .resource_meta
@@ -114,7 +112,8 @@ impl ComputePassCommands<'_, '_, '_> {
                                 uses.set_buffer_size(min + offset);
                             }
                             (None, None) => (), // TODO: Might be a better way to handle this case,
-                            // since right now it'll probably break if no other usage makes the buffer large enough
+                            // since right now it'll probably break if no other usage makes the buffer large enough.
+                            // That should be really silly and rare though
                         }
 
                         match ty {
@@ -124,6 +123,7 @@ impl ComputePassCommands<'_, '_, '_> {
                                     "buffer bound to uniform slot must be passed as a uniform; try using `.uniform()` on a `BufferSlice`"
                                 );
                                 uses.set_uniform_buffer();
+                                commands.mark_resource_read(handle.into());
                             }
                             wgpu::BufferBindingType::Storage { read_only } => {
                                 assert!(
@@ -134,6 +134,10 @@ impl ComputePassCommands<'_, '_, '_> {
                                     "buffer bound to storage slot must be passed as a storage with the same ReadWrite access mode; try using `.storage()` on a `BufferSlice`, and ensure both have the same access mode"
                                 );
                                 uses.set_storage_buffer();
+                                match read_only {
+                                    true => commands.mark_resource_read(handle.into()),
+                                    false => commands.mark_resource_write(handle.into()),
+                                }
                             }
                         }
                     },

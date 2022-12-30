@@ -7,13 +7,15 @@ use wgpu::{
 };
 
 use crate::bitset::Bitset;
-use crate::commands::{ComputePassCommand, RenderCommand, RenderCommands};
+use crate::commands::{
+    ComputePassCommand, RenderCommand, RenderCommands, ResourceAccesses, ResourceList,
+    VirtualBuffers, VirtualTextures,
+};
 use crate::named_slotmap::NamedSlotMap;
 use crate::node::{NodeKey, OrderingList, RenderNode, RenderNodeMeta};
 use crate::resources::{
     BindGroupCache, BufferBinding, BufferBindings, NodeResourceAccess, PipelineStorage,
-    RenderResources, ResourceAccesses, ResourceHandle, ResourceList, ResourceRev, ResourceUse,
-    Resources, TextureBinding, TextureBindings, VirtualBuffers, VirtualTextures,
+    RenderResources, ResourceHandle, ResourceUse, TextureBinding, TextureBindings,
 };
 use crate::RenderContext;
 
@@ -130,38 +132,33 @@ impl RenderGraph {
         }
 
         // Run nodes to determine resource usage/build command queue
-        let mut resources = Resources {
+        // TODO: Pool these bits
+        let mut queue = vec![];
+        let mut bind_cache = BindGroupCache::new();
+        let mut resource_meta = FastHashMap::default();
+
+        let mut commands = RenderCommands {
+            pipelines: &pipelines,
+            queue: &mut queue,
+            bind_cache: &mut bind_cache,
+            resource_meta: &mut resource_meta,
             node_index: 0,
             resources: ResourceList::new(),
-            resource_rev: ResourceRev::new(),
             resource_accesses: ResourceAccesses::from_iter(
                 std::iter::repeat(NodeResourceAccess::new()).take(self.nodes.len()),
             ),
             virtual_buffers: VirtualBuffers::new(),
             virtual_textures: VirtualTextures::new(),
-            compute_pipelines: &pipelines.compute_pipelines,
         };
-
-        // TODO: Pool these bits
-        let mut queue = vec![];
-        let mut bind_cache = BindGroupCache::new();
-        let mut resource_meta = FastHashMap::default();
 
         for (index, node) in nodes
             .iter()
             .map(|&key| self.nodes.get(key).unwrap())
             .enumerate()
         {
-            resources.node_index = index;
+            commands.node_index = index;
 
-            let mut commands = RenderCommands {
-                pipelines: &pipelines,
-                queue: &mut queue,
-                bind_cache: &mut bind_cache,
-                resource_meta: &mut resource_meta,
-            };
-
-            (node.run_fn)(&mut commands, &mut resources)
+            (node.run_fn)(&mut commands)
         }
 
         // # Detect ambiguities
@@ -190,7 +187,7 @@ impl RenderGraph {
         for index_a in 0..nodes.len() {
             for index_b in all_dependencies[index_a].inverted().iter() {
                 if !all_dependencies[index_b].contains(index_a).unwrap() {
-                    if do_nodes_conflict(&resources, index_a, index_b) {
+                    if do_nodes_conflict(&commands, index_a, index_b) {
                         ambiguities.push((
                             self.nodes.get_name(nodes[index_a]).unwrap().to_string(),
                             self.nodes.get_name(nodes[index_b]).unwrap().to_string(),
@@ -204,14 +201,20 @@ impl RenderGraph {
             return Err(RenderGraphError::WriteOrderAmbiguity(ambiguities));
         }
 
+        let RenderCommands {
+            virtual_buffers,
+            virtual_textures,
+            ..
+        } = commands;
+
         Ok(RenderGraphCompilation {
             graph: self,
             pipelines,
             queue,
             bind_cache,
             resource_meta,
-            virtual_buffers: resources.virtual_buffers,
-            virtual_textures: resources.virtual_textures,
+            virtual_buffers,
+            virtual_textures,
         })
     }
 }
@@ -368,8 +371,8 @@ impl RenderGraphCompilation<'_> {
     }
 }
 
-fn do_nodes_conflict(res: &Resources, left: usize, right: usize) -> bool {
-    let (left, right) = (&res.resource_accesses[left], &res.resource_accesses[right]);
+fn do_nodes_conflict(cmd: &RenderCommands, left: usize, right: usize) -> bool {
+    let (left, right) = (&cmd.resource_accesses[left], &cmd.resource_accesses[right]);
 
     if left.reads.intersects_with(&right.writes) {
         true
