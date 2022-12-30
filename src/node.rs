@@ -4,7 +4,6 @@ use naga::FastHashSet;
 use slotmap::new_key_type;
 
 use crate::commands::RenderCommands;
-use crate::resources::Resources;
 
 new_key_type! { pub struct NodeKey; }
 
@@ -20,7 +19,7 @@ pub trait RenderNode {
         vec![]
     }
 
-    fn run(commands: &mut RenderCommands, resources: &mut Resources);
+    fn run(commands: &mut RenderCommands);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -55,7 +54,7 @@ pub(crate) type OrderingList = FastHashSet<Cow<'static, str>>;
 pub struct RenderNodeMeta {
     pub(crate) before: OrderingList,
     pub(crate) after: OrderingList,
-    pub(crate) run_fn: fn(&mut RenderCommands, &mut Resources),
+    pub(crate) run_fn: fn(&mut RenderCommands),
     pub(crate) type_name: Option<&'static str>,
 }
 

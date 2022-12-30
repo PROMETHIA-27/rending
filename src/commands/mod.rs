@@ -1,17 +1,16 @@
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 
 use naga::FastHashMap;
 use wgpu::BufferUsages;
-use wgpu_core::hub::Resource;
 
+use crate::named_slotmap::NamedSlotMap;
 use crate::resources::{
-    BindGroupCache, BufferHandle, PipelineStorage, ResourceHandle, ResourceUse,
+    BindGroupCache, BufferHandle, ComputePipelineHandle, NodeResourceAccess, PipelineStorage,
+    ResourceHandle, ResourceUse, TextureHandle,
 };
 
-pub use self::inout::{ReadBuffer, ReadWriteBuffer, WriteBuffer};
 pub(crate) use self::pass::{ComputePassCommand, ComputePassCommands};
 
-mod inout;
 mod pass;
 
 #[derive(Debug)]
@@ -21,11 +20,30 @@ pub(crate) enum RenderCommand {
     ComputePass(Option<Cow<'static, str>>, Vec<ComputePassCommand>),
 }
 
+pub(crate) type ResourceList = Vec<(Cow<'static, str>, ResourceHandle)>;
+pub(crate) type ResourceAccesses = Vec<NodeResourceAccess>;
+pub(crate) type VirtualBuffers = NamedSlotMap<BufferHandle, usize>;
+pub(crate) type VirtualTextures = NamedSlotMap<TextureHandle, usize>;
+
 pub struct RenderCommands<'q, 'r> {
+    /// Access pipelines for getting handles and dispatch, etc.
     pub(crate) pipelines: &'r PipelineStorage,
+    /// Queue of rendercommands being built up
     pub(crate) queue: &'q mut Vec<RenderCommand>,
+    /// Cache for bind groups being selected
     pub(crate) bind_cache: &'q mut BindGroupCache,
+    /// Resource usage information for transients/retained verification
     pub(crate) resource_meta: &'q mut FastHashMap<ResourceHandle, ResourceUse>,
+    /// The index of the current node this is being passed to
+    pub(crate) node_index: usize,
+    /// A linear list of all resources that have been accessed so far
+    pub(crate) resources: ResourceList,
+    /// Bitsets for each node of which resources they access and how
+    pub(crate) resource_accesses: ResourceAccesses,
+    /// Virtual handles for each accessed buffer
+    pub(crate) virtual_buffers: VirtualBuffers,
+    /// Virtual handles for each accessed texture
+    pub(crate) virtual_textures: VirtualTextures,
 }
 
 impl<'q, 'r> RenderCommands<'q, 'r> {
@@ -33,7 +51,7 @@ impl<'q, 'r> RenderCommands<'q, 'r> {
         self.queue.push(c)
     }
 
-    fn buffer_meta(&mut self, handle: BufferHandle) -> (&mut u64, &mut BufferUsages, &mut bool) {
+    fn set_buffer_meta(&mut self, handle: BufferHandle, size: u64, usage: BufferUsages) {
         let handle = ResourceHandle::Buffer(handle);
         match self
             .resource_meta
@@ -41,25 +59,71 @@ impl<'q, 'r> RenderCommands<'q, 'r> {
             .or_insert(ResourceUse::default_from_handle(handle))
         {
             ResourceUse::Buffer {
-                size,
-                usage,
-                mapped,
-            } => (size, usage, mapped),
+                size: buf_size,
+                usage: buf_usage,
+                ..
+            } => {
+                *buf_size = (*buf_size).max(size);
+                *buf_usage |= usage;
+            }
             _ => unreachable!(
                 "this should not be hit; buffer_meta() should only be called on buffer metadata"
             ),
         }
     }
 
-    pub fn write_buffer(&mut self, buffer: WriteBuffer, offset: u64, bytes: &[u8]) {
-        let (size, usage, _) = self.buffer_meta(buffer.0);
-        *size = (*size).max(offset + bytes.len() as u64);
-        *usage |= BufferUsages::COPY_DST;
-        self.enqueue(RenderCommand::WriteBuffer(
-            buffer.0,
-            offset,
-            bytes.to_owned(),
-        ))
+    fn mark_resource_read(&mut self, handle: ResourceHandle) {
+        match handle {
+            ResourceHandle::Buffer(handle) => {
+                let &index = self.virtual_buffers.get(handle).unwrap();
+                self.resource_accesses[self.node_index].reads.insert(index);
+            }
+            ResourceHandle::Texture(handle) => {
+                let &index = self.virtual_textures.get(handle).unwrap();
+                self.resource_accesses[self.node_index].reads.insert(index);
+            }
+        }
+    }
+
+    fn mark_resource_write(&mut self, handle: ResourceHandle) {
+        match handle {
+            ResourceHandle::Buffer(handle) => {
+                let &index = self.virtual_buffers.get(handle).unwrap();
+                self.resource_accesses[self.node_index].writes.insert(index);
+            }
+            ResourceHandle::Texture(handle) => {
+                let &index = self.virtual_textures.get(handle).unwrap();
+                self.resource_accesses[self.node_index].writes.insert(index);
+            }
+        }
+    }
+
+    pub fn buffer(&mut self, name: impl Into<Cow<'static, str>> + Borrow<str>) -> BufferHandle {
+        match self.virtual_buffers.get_key(name.borrow()) {
+            Some(handle) => handle,
+            None => {
+                let name = name.into();
+                let index = self.resources.len();
+                let handle = self.virtual_buffers.insert(name.clone(), index);
+                self.resources
+                    .push((name.clone(), ResourceHandle::Buffer(handle)));
+                handle
+            }
+        }
+    }
+
+    pub fn compute_pipeline(&self, name: &str) -> ComputePipelineHandle {
+        self.pipelines
+            .compute_pipelines
+            .get_key(name)
+            .unwrap_or_else(|| panic!("no compute pipeline named `{name}` available"))
+    }
+
+    pub fn write_buffer(&mut self, buffer: BufferHandle, offset: u64, bytes: &[u8]) {
+        self.set_buffer_meta(buffer, offset + bytes.len() as u64, BufferUsages::COPY_DST);
+        self.mark_resource_write(buffer.into());
+
+        self.enqueue(RenderCommand::WriteBuffer(buffer, offset, bytes.to_owned()))
     }
 
     pub fn compute_pass<'c>(
@@ -77,20 +141,17 @@ impl<'q, 'r> RenderCommands<'q, 'r> {
 
     pub fn copy_buffer_to_buffer(
         &mut self,
-        src: ReadBuffer,
+        src: BufferHandle,
         src_offset: u64,
-        dst: WriteBuffer,
+        dst: BufferHandle,
         dst_offset: u64,
         size: u64,
     ) {
-        let (src, dst) = (src.0, dst.0);
+        self.set_buffer_meta(src, src_offset + size, BufferUsages::COPY_SRC);
+        self.set_buffer_meta(dst, dst_offset + size, BufferUsages::COPY_DST);
 
-        let (src_size, usage, _) = self.buffer_meta(src);
-        *src_size = (*src_size).max(src_offset + size);
-        *usage |= BufferUsages::COPY_SRC;
-        let (dst_size, usage, _) = self.buffer_meta(dst);
-        *dst_size = (*dst_size).max(dst_offset + size);
-        *usage |= BufferUsages::COPY_DST;
+        self.mark_resource_read(src.into());
+        self.mark_resource_write(dst.into());
 
         self.enqueue(RenderCommand::CopyBufferToBuffer(
             src, src_offset, dst, dst_offset, size,

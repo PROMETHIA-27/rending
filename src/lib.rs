@@ -4,7 +4,6 @@ use std::path::Path;
 use commands::RenderCommands;
 use node::{NodeInput, NodeOutput, RenderNode};
 use reflect::{ModuleError, ReflectedComputePipeline};
-use resources::Resources;
 use spirv_iter::SpirvIterator;
 use thiserror::Error;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
@@ -103,14 +102,15 @@ impl RenderNode for ComputeLevels {
         "compute_levels".into()
     }
 
-    fn run(commands: &mut RenderCommands, res: &mut Resources) {
-        let ascii = res.write_buffer("ascii_buffer");
+    fn run(commands: &mut RenderCommands) {
+        let compute_levels = commands.compute_pipeline("compute_levels");
+        let ascii = commands.buffer("ascii_buffer");
 
         commands.write_buffer(ascii, 0, &[0xDE, 0xAD, 0xBE, 0xEF]);
 
         commands
             .compute_pass(Some("pass"))
-            .pipeline(res.compute_pipeline("compute_levels"))
+            .pipeline(compute_levels)
             .bind_group(0, [(0, ascii.slice(..).uniform())])
             .dispatch(256, 1, 1);
     }
@@ -127,9 +127,9 @@ impl RenderNode for CopyToStaging {
         vec![ComputeLevels::name()]
     }
 
-    fn run(commands: &mut RenderCommands, res: &mut Resources) {
-        let buffer = res.read_buffer("ascii_buffer");
-        let staging = res.write_buffer("staging");
+    fn run(commands: &mut RenderCommands) {
+        let buffer = commands.buffer("ascii_buffer");
+        let staging = commands.buffer("staging");
         commands.copy_buffer_to_buffer(buffer, 0, staging, 0, 4);
     }
 }
