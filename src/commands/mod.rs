@@ -45,6 +45,9 @@ impl<'q, 'r> RenderCommands<'q, 'r> {
                 usage,
                 mapped,
             } => (size, usage, mapped),
+            _ => unreachable!(
+                "this should not be hit; buffer_meta() should only be called on buffer metadata"
+            ),
         }
     }
 
