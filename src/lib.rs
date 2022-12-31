@@ -4,10 +4,13 @@ use std::path::Path;
 use commands::RenderCommands;
 use node::{NodeInput, NodeOutput, RenderNode};
 use reflect::{ModuleError, ReflectedComputePipeline};
+use resources::TextureSize;
 use spirv_iter::SpirvIterator;
 use thiserror::Error;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
-use wgpu::{Adapter, BufferDescriptor, BufferUsages, Device, Instance, Label, MapMode, Queue};
+use wgpu::{
+    Adapter, BufferDescriptor, BufferUsages, Device, Instance, Label, MapMode, Queue, TextureFormat,
+};
 
 use crate::resources::{PipelineStorage, RenderResources};
 
@@ -105,13 +108,21 @@ impl RenderNode for ComputeLevels {
     fn run(commands: &mut RenderCommands) {
         let compute_levels = commands.compute_pipeline("compute_levels");
         let ascii = commands.buffer("ascii_buffer");
+        let tex = commands.texture("tex");
+        commands
+            .texture_constraints(tex)
+            .has_size(TextureSize::D2 { x: 256, y: 256 })
+            .has_format(TextureFormat::Rgba32Float);
 
         commands.write_buffer(ascii, 0, &[0xDE, 0xAD, 0xBE, 0xEF]);
 
         commands
             .compute_pass(Some("pass"))
             .pipeline(compute_levels)
-            .bind_group(0, [(0, ascii.slice(..).uniform())])
+            .bind_group(
+                0,
+                [(0, ascii.slice(..).uniform()), (1, tex.view().create())],
+            )
             .dispatch(256, 1, 1);
     }
 }
@@ -128,6 +139,8 @@ impl RenderNode for CopyToStaging {
     }
 
     fn run(commands: &mut RenderCommands) {
+        let tex = commands.texture("bruh");
+
         let buffer = commands.buffer("ascii_buffer");
         let staging = commands.buffer("staging");
         commands.copy_buffer_to_buffer(buffer, 0, staging, 0, 4);
