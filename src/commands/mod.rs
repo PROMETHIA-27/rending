@@ -1,12 +1,12 @@
 use std::borrow::{Borrow, Cow};
 
 use naga::FastHashMap;
-use wgpu::BufferUsages;
+use wgpu::{BufferUsages, TextureFormat};
 
 use crate::named_slotmap::NamedSlotMap;
 use crate::resources::{
     BindGroupCache, BufferHandle, ComputePipelineHandle, NodeResourceAccess, PipelineStorage,
-    ResourceHandle, ResourceUse, TextureHandle,
+    ResourceHandle, ResourceMeta, TextureHandle, TextureSize,
 };
 
 pub(crate) use self::pass::{ComputePassCommand, ComputePassCommands};
@@ -32,8 +32,9 @@ pub struct RenderCommands<'q, 'r> {
     pub(crate) queue: &'q mut Vec<RenderCommand>,
     /// Cache for bind groups being selected
     pub(crate) bind_cache: &'q mut BindGroupCache,
+    // TODO: Split resource metas into individual resource types?
     /// Resource usage information for transients/retained verification
-    pub(crate) resource_meta: &'q mut FastHashMap<ResourceHandle, ResourceUse>,
+    pub(crate) resource_meta: &'q mut FastHashMap<ResourceHandle, ResourceMeta>,
     /// The index of the current node this is being passed to
     pub(crate) node_index: usize,
     /// A linear list of all resources that have been accessed so far
@@ -52,13 +53,13 @@ impl<'q, 'r> RenderCommands<'q, 'r> {
     }
 
     fn set_buffer_meta(&mut self, handle: BufferHandle, size: u64, usage: BufferUsages) {
-        let handle = ResourceHandle::Buffer(handle);
+        let handle = handle.into();
         match self
             .resource_meta
             .entry(handle)
-            .or_insert(ResourceUse::default_from_handle(handle))
+            .or_insert(ResourceMeta::default_from_handle(handle))
         {
-            ResourceUse::Buffer {
+            ResourceMeta::Buffer {
                 size: buf_size,
                 usage: buf_usage,
                 ..
@@ -124,6 +125,11 @@ impl<'q, 'r> RenderCommands<'q, 'r> {
         }
     }
 
+    pub fn texture_constraints(&mut self, texture: TextureHandle) -> TextureConstraints {
+        let meta = self.resource_meta.get_mut(&texture.into()).unwrap();
+        TextureConstraints { texture_meta: meta }
+    }
+
     pub fn compute_pipeline(&self, name: &str) -> ComputePipelineHandle {
         self.pipelines
             .compute_pipelines
@@ -168,5 +174,47 @@ impl<'q, 'r> RenderCommands<'q, 'r> {
         self.enqueue(RenderCommand::CopyBufferToBuffer(
             src, src_offset, dst, dst_offset, size,
         ))
+    }
+}
+
+pub struct TextureConstraints<'c> {
+    texture_meta: &'c mut ResourceMeta,
+}
+
+impl TextureConstraints<'_> {
+    pub fn has_size(&mut self, size: TextureSize) -> &mut Self {
+        let new_size = size;
+        match self.texture_meta {
+            ResourceMeta::Texture {
+                size,
+                ..
+            } => {
+                match size {
+                    &mut Some(size) => assert_eq!(size, new_size, "texture constrained to size {new_size:?} when it is already constrained to size {size:?}. Perhaps there is a typo or extra constraint set?"),
+                    None => 
+                        *size = Some(new_size)
+                    ,
+                }
+            },
+            _ => unreachable!(),
+        }
+
+        self
+    }
+
+    pub fn has_format(&mut self, format: TextureFormat) -> &mut Self {
+        let new_format = format;
+        match self.texture_meta {
+            ResourceMeta::Texture {
+                format,
+                ..
+            } => match format {
+                &mut Some(format) => assert_eq!(format, new_format, "texture constrained to format {new_format:?} when it is already constrained to format {format:?}. Perhaps there is a type or extra constraint set?"),
+                None => *format = Some(new_format),
+            },
+            _ => unreachable!(),
+        }
+
+        self
     }
 }
