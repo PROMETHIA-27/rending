@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 
 use crate::resources::{
     BindGroupHandle, BufferUse, ComputePipelineHandle, ResourceBinding,
-    ResourceUse, RWMode,
+    ResourceMeta, RWMode, TextureViewDimension,
 };
 
 use super::RenderCommands;
@@ -46,14 +46,14 @@ impl ComputePassCommands<'_, '_, '_> {
         self
     }
 
-    pub fn dispatch(mut self, x: u32, y: u32, z: u32) -> Self {
+    pub fn dispatch(self, x: u32, y: u32, z: u32) -> Self {
         // Have to temporarily destruct to get around aliasing borrows
         let Self {
             commands,
             label,
             mut queue,
             pipeline,
-            bindings,
+            mut bindings,
         } = self;
 
         let compute_pipeline = pipeline
@@ -67,12 +67,12 @@ impl ComputePassCommands<'_, '_, '_> {
             .unwrap();
 
         for (group_index, (binding, &group_layout)) in bindings
-            .iter()
+            .iter_mut()
             .take(layout.groups.len())
             .zip(layout.groups.iter())
             .enumerate()
         {
-            let Some(binding) = binding.as_ref() else { panic!("not enough groups bound for pipeline") };
+            let Some(binding) = binding.as_mut() else { panic!("not enough groups bound for pipeline") };
 
             let handle = commands.bind_cache.get_handle(group_layout, &binding[..]);
             let group_layout = commands
@@ -81,17 +81,17 @@ impl ComputePassCommands<'_, '_, '_> {
                 .get(layout.groups[group_index as usize])
                 .unwrap();
 
-            for &(binding, resource) in binding.iter() {
-                let uses = commands
+            for (binding, resource) in binding.iter_mut() {
+                let meta = commands
                     .resource_meta
                     .entry(resource.handle())
-                    .or_insert_with(|| ResourceUse::default_from_handle(resource.handle()));
-                let entry = group_layout.entries[binding as usize];
+                    .or_insert_with(|| ResourceMeta::default_from_handle(resource.handle()));
+                let entry = group_layout.entries[*binding as usize];
 
                 match (resource, entry.ty) {
                     (
-                        ResourceBinding::Buffer { handle, offset, size, usage },
-                        wgpu::BindingType::Buffer { ty, has_dynamic_offset, min_binding_size }
+                        &mut ResourceBinding::Buffer { handle, offset, size, usage, .. },
+                        wgpu::BindingType::Buffer { ty, min_binding_size, .. }
                     ) => {
                         let binding_size = size.map(u64::from);
                         let min_binding_size = min_binding_size.map(u64::from);
@@ -103,13 +103,13 @@ impl ComputePassCommands<'_, '_, '_> {
                                     when the minimum binding size was {min} at 
                                     binding slot {{ {group_index}, {binding} }}"
                                 );
-                                uses.set_buffer_size(binding + offset);
+                                meta.set_buffer_size(binding + offset);
                             }
                             (Some(binding), None) => {
-                                uses.set_buffer_size(binding + offset);
+                                meta.set_buffer_size(binding + offset);
                             },
                             (None, Some(min)) => {
-                                uses.set_buffer_size(min + offset);
+                                meta.set_buffer_size(min + offset);
                             }
                             (None, None) => (), // TODO: Might be a better way to handle this case,
                             // since right now it'll probably break if no other usage makes the buffer large enough.
@@ -119,35 +119,81 @@ impl ComputePassCommands<'_, '_, '_> {
                         match ty {
                             wgpu::BufferBindingType::Uniform => {
                                 assert!(
-                                    resource.buffer_use().matches_use(BufferUse::Uniform), 
+                                    usage.matches_use(BufferUse::Uniform), 
                                     "buffer bound to uniform slot must be passed as a uniform; try using `.uniform()` on a `BufferSlice`"
                                 );
-                                uses.set_uniform_buffer();
+                                meta.set_uniform_buffer();
                                 commands.mark_resource_read(handle.into());
                             }
                             wgpu::BufferBindingType::Storage { read_only } => {
                                 assert!(
-                                    resource.buffer_use().matches_use(BufferUse::Storage(match read_only {
+                                    usage.matches_use(BufferUse::Storage(match read_only {
                                         true => RWMode::READ,
                                         false => RWMode::READWRITE,
                                     })), 
                                     "buffer bound to storage slot must be passed as a storage with the same ReadWrite access mode; try using `.storage()` on a `BufferSlice`, and ensure both have the same access mode"
                                 );
-                                uses.set_storage_buffer();
-                                match read_only {
-                                    true => commands.mark_resource_read(handle.into()),
-                                    false => commands.mark_resource_write(handle.into()),
+                                meta.set_storage_buffer();
+                                commands.mark_resource_read(handle.into());
+                                if !read_only {
+
+                                    commands.mark_resource_write(handle.into())
                                 }
                             }
                         }
                     },
+                    (
+                        ResourceBinding::Texture { handle, dimension, base_mip, mip_count, base_layer, layer_count, .. },
+                        wgpu::BindingType::Texture { view_dimension, multisampled, .. }
+                    ) => {
+                        // TODO: Constrain layer count somehow
+                        let (handle, base_mip, mip_count) = (*handle, *base_mip, *mip_count);
+                        if let Some(count) = mip_count {
+                            meta.set_mip_count(base_mip + count.get());
+                        } else if base_mip > 0 {
+                            meta.set_mip_count(base_mip);
+                        }
+
+                        *dimension = Some(TextureViewDimension::from_wgpu(view_dimension));
+                        
+                        if multisampled {
+                            meta.set_multisampled();
+                        }
+
+                        meta.set_texture_binding();
+                        commands.mark_resource_read(handle.into());
+                    },
+                    (
+                        ResourceBinding::Texture { handle, dimension, base_mip, mip_count, base_layer, layer_count, .. },
+                        wgpu::BindingType::StorageTexture { access, format, view_dimension }
+                    ) => {
+                        let (handle, base_mip, mip_count) = (*handle, *base_mip, *mip_count);
+                        if let Some(count) = mip_count {
+                            meta.set_mip_count(base_mip + count.get());
+                        } else if base_mip > 0 {
+                            meta.set_mip_count(base_mip);
+                        }
+
+                        *dimension = Some(TextureViewDimension::from_wgpu(view_dimension));
+
+                        meta.set_format(format);
+                        meta.set_storage_binding();
+                        match access {
+                            wgpu::StorageTextureAccess::WriteOnly => commands.mark_resource_write(handle.into()),
+                            wgpu::StorageTextureAccess::ReadOnly => commands.mark_resource_read(handle.into()),
+                            wgpu::StorageTextureAccess::ReadWrite => {
+                                commands.mark_resource_read(handle.into());
+                                commands.mark_resource_write(handle.into());
+                            },
+                        }
+                    }
                     _ => todo!(),
                 }
             }
             queue.push(ComputePassCommand::BindGroup(group_index as u32, handle));
         }
 
-        // this == self but self can't be used here
+        // this == self but `self` can't be used here
         let mut this = Self {
             commands,
             label,

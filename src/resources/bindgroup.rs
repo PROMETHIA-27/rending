@@ -5,6 +5,7 @@ use naga::FastHashMap;
 use slotmap::{new_key_type, SecondaryMap, SlotMap};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, BufferBinding, Texture,
+    TextureView, TextureViewDescriptor,
 };
 
 use crate::RenderContext;
@@ -13,7 +14,7 @@ use super::buffer::BufferUse;
 use super::pipeline::PipelineStorage;
 use super::{
     BindGroupLayoutHandle, BufferBindings, BufferHandle, RenderResources, ResourceHandle,
-    ResourceUse, TextureBindings, TextureHandle, TextureViewDimension,
+    ResourceMeta, TextureAspect, TextureBindings, TextureHandle, TextureViewDimension,
 };
 
 pub(crate) type BindGroups = SecondaryMap<BindGroupHandle, BindGroup>;
@@ -61,10 +62,9 @@ impl BindGroupCache {
         &self,
         context: RenderContext,
         pipelines: &PipelineStorage,
-        resources: &RenderResources,
         bound_buffers: &BufferBindings,
         bound_textures: &TextureBindings,
-        meta: &FastHashMap<ResourceHandle, ResourceUse>,
+        meta: &FastHashMap<ResourceHandle, ResourceMeta>,
     ) -> BindGroups {
         let mut bind_groups = BindGroups::with_capacity(self.groups.len());
         for (handle, (layout, bindings)) in &self.groups {
@@ -73,36 +73,73 @@ impl BindGroupCache {
                 .get(*layout)
                 .expect("bind group layouts should not be invalidated before bind group creation");
 
-            let entries = bindings
+            let bindings: Vec<(u32, BoundResource)> = bindings
                 .iter()
                 .map(|&(index, binding)| {
                     let &meta = meta
                         .get(&binding.handle())
                         .expect("all bound resources should have meta associated");
 
-                    BindGroupEntry {
-                        binding: index,
-                        resource: match (binding, meta) {
-                            (
-                                ResourceBinding::Buffer {
-                                    handle,
-                                    offset,
-                                    size,
-                                    ..
-                                },
-                                ResourceUse::Buffer { .. },
-                            ) => BindingResource::Buffer(BufferBinding {
-                                buffer: bound_buffers.get(handle).expect(
-                                    "buffers should not be invalidated before bind group creation",
-                                ).as_ref(),
+                    let binding = match (binding, meta) {
+                        (
+                            ResourceBinding::Buffer {
+                                handle,
                                 offset,
                                 size,
-                            }),
-                            _ => panic!("resource use and resource type must match"),
-                        },
-                    }
+                                ..
+                            },
+                            ResourceMeta::Buffer { .. },
+                        ) => BoundResource::Buffer(BufferBinding {
+                            buffer: bound_buffers
+                                .get(handle)
+                                .expect(
+                                    "buffers should not be invalidated before bind group creation",
+                                )
+                                .as_ref(),
+                            offset,
+                            size,
+                        }),
+                        (
+                            ResourceBinding::Texture {
+                                handle,
+                                dimension,
+                                aspect,
+                                base_mip,
+                                mip_count,
+                                base_layer,
+                                layer_count,
+                            },
+                            ResourceMeta::Texture { format, .. },
+                        ) => BoundResource::Texture(
+                            bound_textures.get(handle).unwrap().as_ref().create_view(
+                                &TextureViewDescriptor {
+                                    label: None,
+                                    format,
+                                    dimension: dimension.map(|dim| dim.into_wgpu()),
+                                    aspect: aspect.into_wgpu(),
+                                    base_mip_level: base_mip,
+                                    mip_level_count: mip_count,
+                                    base_array_layer: base_layer,
+                                    array_layer_count: layer_count,
+                                },
+                            ),
+                        ),
+                        _ => panic!("resource use and resource type must match"),
+                    };
+                    (index, binding)
                 })
-                .collect::<Vec<_>>();
+                .collect();
+
+            let entries: Vec<BindGroupEntry> = bindings
+                .iter()
+                .map(|(index, binding)| BindGroupEntry {
+                    binding: *index,
+                    resource: match binding {
+                        BoundResource::Buffer(binding) => BindingResource::Buffer(binding.clone()),
+                        BoundResource::Texture(view) => BindingResource::TextureView(view),
+                    },
+                })
+                .collect();
 
             let bind_group = context.device.create_bind_group(&BindGroupDescriptor {
                 label: None,
@@ -126,7 +163,8 @@ pub enum ResourceBinding {
     },
     Texture {
         handle: TextureHandle,
-        dimensions: TextureViewDimension,
+        dimension: Option<TextureViewDimension>,
+        aspect: TextureAspect,
         base_mip: u32,
         mip_count: Option<NonZeroU32>,
         base_layer: u32,
@@ -137,8 +175,8 @@ pub enum ResourceBinding {
 impl ResourceBinding {
     pub(crate) fn handle(&self) -> ResourceHandle {
         match self {
-            &ResourceBinding::Buffer { handle, .. } => ResourceHandle::Buffer(handle),
-            &ResourceBinding::Texture { handle, .. } => ResourceHandle::Texture(handle),
+            &ResourceBinding::Buffer { handle, .. } => handle.into(),
+            &ResourceBinding::Texture { handle, .. } => handle.into(),
         }
     }
 
@@ -148,4 +186,9 @@ impl ResourceBinding {
             _ => panic!("attempted to bind a non-buffer resource to a buffer slot"),
         }
     }
+}
+
+enum BoundResource<'b> {
+    Buffer(BufferBinding<'b>),
+    Texture(TextureView),
 }
