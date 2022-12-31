@@ -15,7 +15,7 @@ use crate::named_slotmap::NamedSlotMap;
 use crate::node::{NodeKey, OrderingList, RenderNode, RenderNodeMeta};
 use crate::resources::{
     BindGroupCache, BufferBinding, BufferBindings, NodeResourceAccess, PipelineStorage,
-    RenderResources, ResourceHandle, ResourceUse, TextureBinding, TextureBindings,
+    RenderResources, ResourceHandle, ResourceMeta, TextureBinding, TextureBindings,
 };
 use crate::RenderContext;
 
@@ -32,6 +32,10 @@ pub enum RenderGraphError {
     BufferTooSmall(String),
     #[error("attempted to use a retained buffer `{0}` which lacked usage flags for what it was used for. Missing flags: {1:?}")]
     MissingBufferUsage(String, BufferUsages),
+    #[error("transient texture `{0}` never has a size specified; try using `RenderCommands::texture_constraints()` and `TextureConstraints::has_size()`")]
+    UnconstrainedTextureSize(String),
+    #[error("transient texture `{0}` never has a format specified; try using `RenderCommands::texture_constraints()` and `TextureConstraints::has_format()`")]
+    UnconstrainedTextureFormat(String),
 }
 
 #[derive(Debug)]
@@ -225,7 +229,7 @@ pub struct RenderGraphCompilation<'g> {
     pipelines: &'g PipelineStorage,
     queue: Vec<RenderCommand>,
     bind_cache: BindGroupCache,
-    resource_meta: FastHashMap<ResourceHandle, ResourceUse>,
+    resource_meta: FastHashMap<ResourceHandle, ResourceMeta>,
     virtual_buffers: VirtualBuffers,
     virtual_textures: VirtualTextures,
 }
@@ -240,15 +244,14 @@ impl RenderGraphCompilation<'_> {
             .virtual_buffers
             .iter_names()
             .filter_map(|(name, handle)| {
-                let (size, usage, mapped) =
-                    match self.resource_meta.get(&ResourceHandle::Buffer(handle))? {
-                        &ResourceUse::Buffer {
-                            size,
-                            usage,
-                            mapped,
-                        } => (size, usage, mapped),
-                        _ => None?,
-                    };
+                let (size, usage, mapped) = match self.resource_meta.get(&handle.into())? {
+                    &ResourceMeta::Buffer {
+                        size,
+                        usage,
+                        mapped,
+                    } => (size, usage, mapped),
+                    _ => None?,
+                };
 
                 // Bind retained resources
                 if let Some(buf) = res.buffers.get(name) {
@@ -280,19 +283,18 @@ impl RenderGraphCompilation<'_> {
             .virtual_textures
             .iter_names()
             .filter_map(|(name, handle)| {
-                let (size, mips, samples, format, usage) = match self
-                    .resource_meta
-                    .get_mut(&ResourceHandle::Texture(handle))?
-                {
-                    ResourceUse::Texture {
-                        size,
-                        mip_level_count,
-                        sample_count,
-                        format,
-                        usage,
-                    } => (size, mip_level_count, sample_count, format, usage),
-                    _ => None?,
-                };
+                let (size, mips, samples, format, usage) =
+                    match self.resource_meta.get(&handle.into())? {
+                        ResourceMeta::Texture {
+                            size,
+                            mip_level_count,
+                            sample_count,
+                            format,
+                            usage,
+                            multisampled,
+                        } => (size, mip_level_count, sample_count, format, usage),
+                        _ => None?,
+                    };
 
                 // Bind retained resources
                 if let Some(texture) = res.textures.get(name) {
@@ -300,6 +302,8 @@ impl RenderGraphCompilation<'_> {
                 }
                 // Create transients
                 else {
+                    let Some(size) = size else { return Some(Err(RenderGraphError::UnconstrainedTextureSize(name.to_string()))) };
+                    let Some(format) = format else { return Some(Err(RenderGraphError::UnconstrainedTextureFormat(name.to_string())))};
                     let (dimensions, size) = size.into_wgpu();
                     let texture = ctx.device.create_texture(&TextureDescriptor {
                         label: None,
@@ -319,7 +323,6 @@ impl RenderGraphCompilation<'_> {
         let bind_groups = self.bind_cache.create_groups(
             ctx,
             &self.pipelines,
-            res,
             &bound_buffers,
             &bound_textures,
             &self.resource_meta,
