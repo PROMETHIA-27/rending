@@ -1,14 +1,14 @@
-struct big_chunkus {
-    data: vec4<u32>,
+struct chunk {
+    data: vec4<f32>,
 }
 
 @group(0) @binding(0)
-var<uniform> offset: big_chunkus;
-@group(2) @binding(1)
-var tex: texture_2d_array<f32>;
+var<storage> offset: chunk;
+@group(0) @binding(1)
+var tex: texture_2d<f32>;
 
 @compute @workgroup_size(1, 1, 1)
 fn main() {
-    _ = offset;
-    // _ = tex;
+    let val = textureLoad(tex, vec2(0, 0), 0);
+    chunk.data = val;
 }
