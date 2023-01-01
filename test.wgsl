@@ -1,9 +1,9 @@
-struct chunk {
+struct Chunk {
     data: vec4<f32>,
 }
 
 @group(0) @binding(0)
-var<storage> offset: chunk;
+var<storage, read_write> chunk: Chunk;
 @group(0) @binding(1)
 var tex: texture_2d<f32>;
 
