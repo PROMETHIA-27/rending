@@ -67,12 +67,13 @@ impl BufferSlice {
     /// Turn a buffer slice into a usable resource binding to pass to functions like
     /// [`ComputePassCommands::bind_group()`](crate::commands::ComputePassCommands).
     /// This specifies that the buffer is a storage, and so it must be bound to a storage
-    /// slot with the same RWMode. It also means that the buffer must be marked as:
-    /// - An input if RWMode is Read or ReadWrite
-    /// - An output if RWMode is Write or ReadWrite
-    ///
-    /// in the `RenderNode` that it is being used in.
+    /// slot with the same RWMode. Only RWModes READ and READWRITE are permitted.
     pub fn storage(self, mode: RWMode) -> ResourceBinding {
+        assert_ne!(
+            mode,
+            RWMode::WRITE,
+            "Only RWModes READ and READWRITE are permitted in storage buffers"
+        );
         let Self {
             handle,
             offset,
