@@ -1,13 +1,14 @@
 use std::borrow::Cow;
+use std::error::Error;
 use std::num::NonZeroU64;
 use std::path::Path;
-use std::string::FromUtf8Error;
+use std::str::Utf8Error;
 
 use naga::front::spv::Options as SpvOptions;
-use naga::valid::{Capabilities, ValidationError, ValidationFlags};
+use naga::valid::{Capabilities, ValidationFlags};
 use naga::{
     AddressSpace, FastHashSet, ImageClass, ImageDimension, ShaderStage, StorageAccess,
-    StorageFormat, TypeInner, WithSpan,
+    StorageFormat, TypeInner,
 };
 use thiserror::Error;
 use wgpu::{
@@ -15,6 +16,7 @@ use wgpu::{
     BufferBindingType, ComputePipelineDescriptor, Label, PipelineLayoutDescriptor,
     ShaderModuleDescriptor, ShaderStages, StorageTextureAccess, TextureFormat,
 };
+use wgpu_core::pipeline::{CreateShaderModuleError, ShaderError};
 
 use crate::resources::ShaderModule;
 use crate::spirv_iter::SpirvIterator;
@@ -25,35 +27,69 @@ pub enum ModuleError {
     #[error(transparent)]
     SpvParsing(#[from] naga::front::spv::Error),
     #[error(transparent)]
-    WgslParsing(#[from] naga::front::wgsl::ParseError),
-    #[error(transparent)]
-    Validation(#[from] WithSpan<ValidationError>),
+    Naga(#[from] CreateShaderModuleError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
-    Utf8(#[from] FromUtf8Error),
+    Utf8(#[from] Utf8Error),
 }
 
 pub fn module_from_source<I: SpirvIterator, P: AsRef<Path>>(
     ctx: &RenderContext,
     source: ShaderSource<I, P>,
 ) -> Result<ShaderModule, ModuleError> {
-    let module = match source {
+    let (module, info) = match source {
         ShaderSource::Spirv(spirv) => {
-            naga::front::spv::Parser::new(spirv.into_spirv(), &SpvOptions::default()).parse()?
+            let module = naga::front::spv::Parser::new(spirv.into_spirv(), &SpvOptions::default())
+                .parse()?;
+            let info = naga::valid::Validator::new(ValidationFlags::all(), Capabilities::all())
+                .validate(&module)
+                .map_err(|err| {
+                    CreateShaderModuleError::from(ShaderError {
+                        source: String::new(),
+                        label: None,
+                        inner: err,
+                    })
+                })?;
+            (module, info)
         }
         ShaderSource::FilePath(path) => {
             let bytes = std::fs::read(path)?;
-            naga::front::spv::Parser::new(bytes.into_spirv(), &SpvOptions::default()).parse()?
+            let module = naga::front::spv::Parser::new(bytes.into_spirv(), &SpvOptions::default())
+                .parse()?;
+            let info = naga::valid::Validator::new(ValidationFlags::all(), Capabilities::all())
+                .validate(&module)
+                .map_err(|err| {
+                    CreateShaderModuleError::from(ShaderError {
+                        source: String::new(),
+                        label: None,
+                        inner: err,
+                    })
+                })?;
+            (module, info)
         }
         ShaderSource::WgslFilePath(path) => {
             let bytes = std::fs::read(path)?;
-            naga::front::wgsl::parse_str(&String::from_utf8(bytes)?[..])?
+            let source = std::str::from_utf8(&bytes[..])?;
+            let module = naga::front::wgsl::parse_str(source).map_err(|err| {
+                CreateShaderModuleError::from(ShaderError {
+                    source: source.to_string(),
+                    label: None,
+                    inner: err,
+                })
+            })?;
+            let info = naga::valid::Validator::new(ValidationFlags::all(), Capabilities::all())
+                .validate(&module)
+                .map_err(|err| {
+                    CreateShaderModuleError::from(ShaderError {
+                        source: source.to_string(),
+                        label: None,
+                        inner: err,
+                    })
+                })?;
+            (module, info)
         }
     };
-
-    let info = naga::valid::Validator::new(ValidationFlags::all(), Capabilities::all())
-        .validate(&module)?;
 
     let wgpu = ctx.device.create_shader_module(ShaderModuleDescriptor {
         label: None,
