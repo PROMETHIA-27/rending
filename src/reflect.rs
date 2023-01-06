@@ -16,13 +16,34 @@ use wgpu::{
     BufferBindingType, ComputePipelineDescriptor, Label, PipelineLayoutDescriptor,
     ShaderModuleDescriptor, ShaderStages, StorageTextureAccess, TextureFormat,
 };
-use wgpu_core::pipeline::{CreateShaderModuleError, ShaderError};
+use wgpu_core::pipeline::CreateShaderModuleError;
 
 use crate::resources::ShaderModule;
 use crate::spirv_iter::SpirvIterator;
-use crate::{RenderContext, ShaderSource};
+use crate::RenderContext;
 
-#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ShaderSource<I: SpirvIterator, P: AsRef<Path>> {
+    Spirv(I),
+    FilePath(P),
+    WgslFilePath(P),
+}
+
+impl ShaderSource<&'static [u32], &'static str> {
+    pub fn spirv<I: SpirvIterator>(iter: I) -> ShaderSource<I, &'static str> {
+        ShaderSource::Spirv(iter)
+    }
+
+    pub fn spirv_file_path<P: AsRef<Path>>(path: P) -> ShaderSource<&'static [u32], P> {
+        ShaderSource::FilePath(path)
+    }
+
+    pub fn wgsl_file_path<P: AsRef<Path>>(path: P) -> ShaderSource<&'static [u32], P> {
+        ShaderSource::WgslFilePath(path)
+    }
+}
+
+#[derive(Error)]
 pub enum ModuleError {
     #[error(transparent)]
     SpvParsing(#[from] naga::front::spv::Error),
@@ -32,6 +53,57 @@ pub enum ModuleError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Utf8(#[from] Utf8Error),
+}
+
+impl std::fmt::Debug for ModuleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let error = match self {
+            ModuleError::SpvParsing(arg0) => {
+                return f.debug_tuple("ModuleError").field(arg0).finish()
+            }
+            ModuleError::Io(arg0) => return f.debug_tuple("ModuleError").field(arg0).finish(),
+            ModuleError::Utf8(arg0) => return f.debug_tuple("ModuleError").field(arg0).finish(),
+            ModuleError::Naga(err) => err,
+        };
+
+        use codespan_reporting::diagnostic::Diagnostic;
+        use codespan_reporting::files::SimpleFile;
+        use codespan_reporting::term;
+
+        let error = match error {
+            CreateShaderModuleError::Validation(err) => err,
+            err => return f.debug_tuple("ModuleError").field(err).finish(),
+        };
+
+        let files = SimpleFile::new("wgpu", &error.source);
+        let config = term::Config::default();
+        let mut writer = term::termcolor::Ansi::new(vec![]);
+        let diagnostic = Diagnostic::error()
+            .with_message(error.inner.to_string())
+            .with_labels(
+                error
+                    .inner
+                    .spans()
+                    .map(|&(span, ref desc)| {
+                        codespan_reporting::diagnostic::Label::primary((), span.to_range().unwrap())
+                            .with_message(desc.to_owned())
+                    })
+                    .collect(),
+            )
+            .with_notes({
+                let mut notes = Vec::new();
+                let mut source: &dyn Error = error.inner.as_inner();
+                while let Some(next) = Error::source(source) {
+                    notes.push(next.to_string());
+                    source = next;
+                }
+                notes
+            });
+
+        term::emit(&mut writer, &config, &files, &diagnostic).expect("could not write error");
+
+        f.write_str(&String::from_utf8_lossy(&writer.into_inner()))
+    }
 }
 
 pub fn module_from_source<I: SpirvIterator, P: AsRef<Path>>(
@@ -45,7 +117,7 @@ pub fn module_from_source<I: SpirvIterator, P: AsRef<Path>>(
             let info = naga::valid::Validator::new(ValidationFlags::all(), Capabilities::all())
                 .validate(&module)
                 .map_err(|err| {
-                    CreateShaderModuleError::from(ShaderError {
+                    CreateShaderModuleError::from(wgpu_core::pipeline::ShaderError {
                         source: String::new(),
                         label: None,
                         inner: err,
@@ -60,7 +132,7 @@ pub fn module_from_source<I: SpirvIterator, P: AsRef<Path>>(
             let info = naga::valid::Validator::new(ValidationFlags::all(), Capabilities::all())
                 .validate(&module)
                 .map_err(|err| {
-                    CreateShaderModuleError::from(ShaderError {
+                    CreateShaderModuleError::from(wgpu_core::pipeline::ShaderError {
                         source: String::new(),
                         label: None,
                         inner: err,
@@ -72,7 +144,7 @@ pub fn module_from_source<I: SpirvIterator, P: AsRef<Path>>(
             let bytes = std::fs::read(path)?;
             let source = std::str::from_utf8(&bytes[..])?;
             let module = naga::front::wgsl::parse_str(source).map_err(|err| {
-                CreateShaderModuleError::from(ShaderError {
+                CreateShaderModuleError::from(wgpu_core::pipeline::ShaderError {
                     source: source.to_string(),
                     label: None,
                     inner: err,
@@ -81,7 +153,7 @@ pub fn module_from_source<I: SpirvIterator, P: AsRef<Path>>(
             let info = naga::valid::Validator::new(ValidationFlags::all(), Capabilities::all())
                 .validate(&module)
                 .map_err(|err| {
-                    CreateShaderModuleError::from(ShaderError {
+                    CreateShaderModuleError::from(wgpu_core::pipeline::ShaderError {
                         source: source.to_string(),
                         label: None,
                         inner: err,
@@ -107,6 +179,10 @@ pub enum PipelineError {
     NotComputeShader(String),
     #[error("bind group {0} is greater than the maximum amount of bind groups")]
     BindGroupTooHigh(u32),
+    #[error(transparent)]
+    ModuleError(#[from] ModuleError),
+    #[error(transparent)]
+    IoError(#[from] std::io::Error),
 }
 
 #[derive(Debug)]
