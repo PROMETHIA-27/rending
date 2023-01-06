@@ -3,7 +3,7 @@ use slotmap::SecondaryMap;
 use thiserror::Error;
 use wgpu::{
     BufferDescriptor, BufferUsages, CommandEncoderDescriptor, ComputePassDescriptor,
-    TextureDescriptor,
+    ImageCopyTexture, ImageDataLayout, TextureDescriptor,
 };
 
 use crate::bitset::Bitset;
@@ -14,8 +14,9 @@ use crate::commands::{
 use crate::named_slotmap::NamedSlotMap;
 use crate::node::{NodeKey, OrderingList, RenderNode, RenderNodeMeta};
 use crate::resources::{
-    BindGroupCache, BufferBinding, BufferBindings, NodeResourceAccess, PipelineStorage,
-    RenderResources, ResourceHandle, ResourceMeta, TextureBinding, TextureBindings,
+    BindGroupCache, BufferBinding, BufferBindings, BufferError, NodeResourceAccess,
+    PipelineStorage, RenderResources, ResourceConstraints, ResourceHandle, TextureBinding,
+    TextureBindings, TextureError,
 };
 use crate::RenderContext;
 
@@ -28,14 +29,10 @@ pub enum RenderGraphError {
     #[error("Write order ambiguities were detected between the following nodes: {0:#?}. 
     Please ensure each of these nodes are explicitly ordered using `after` and `before` constraints.")]
     WriteOrderAmbiguity(Vec<(String, String)>),
-    #[error("attempted to use a retained buffer `{0}` which was too small for its usage.")]
-    BufferTooSmall(String),
-    #[error("attempted to use a retained buffer `{0}` which lacked usage flags for what it was used for. Missing flags: {1:?}")]
-    MissingBufferUsage(String, BufferUsages),
-    #[error("transient texture `{0}` never has a size specified; try using `RenderCommands::texture_constraints()` and `TextureConstraints::has_size()`")]
-    UnconstrainedTextureSize(String),
-    #[error("transient texture `{0}` never has a format specified; try using `RenderCommands::texture_constraints()` and `TextureConstraints::has_format()`")]
-    UnconstrainedTextureFormat(String),
+    #[error(transparent)]
+    Buffer(#[from] BufferError),
+    #[error(transparent)]
+    Texture(#[from] TextureError),
 }
 
 #[derive(Debug)]
@@ -139,13 +136,13 @@ impl RenderGraph {
         // TODO: Pool these bits
         let mut queue = vec![];
         let mut bind_cache = BindGroupCache::new();
-        let mut resource_meta = FastHashMap::default();
+        let mut constraints = ResourceConstraints::default();
 
         let mut commands = RenderCommands {
             pipelines: &pipelines,
             queue: &mut queue,
             bind_cache: &mut bind_cache,
-            resource_meta: &mut resource_meta,
+            constraints: &mut constraints,
             node_index: 0,
             resources: ResourceList::new(),
             resource_accesses: ResourceAccesses::from_iter(
@@ -211,12 +208,20 @@ impl RenderGraph {
             ..
         } = commands;
 
+        // Verify constraints
+        for (name, texture) in virtual_textures.iter_names() {
+            let constraints = constraints.textures.get(texture).unwrap();
+            if let Some(err) = constraints.verify(name) {
+                return Err(err.into());
+            }
+        }
+
         Ok(RenderGraphCompilation {
             graph: self,
             pipelines,
             queue,
             bind_cache,
-            resource_meta,
+            constraints,
             virtual_buffers,
             virtual_textures,
         })
@@ -229,7 +234,7 @@ pub struct RenderGraphCompilation<'g> {
     pipelines: &'g PipelineStorage,
     queue: Vec<RenderCommand>,
     bind_cache: BindGroupCache,
-    resource_meta: FastHashMap<ResourceHandle, ResourceMeta>,
+    constraints: ResourceConstraints,
     virtual_buffers: VirtualBuffers,
     virtual_textures: VirtualTextures,
 }
@@ -243,90 +248,66 @@ impl RenderGraphCompilation<'_> {
         let bound_buffers: BufferBindings = self
             .virtual_buffers
             .iter_names()
-            .filter_map(|(name, handle)| {
-                let (size, usage, mapped) = match self.resource_meta.get(&handle.into())? {
-                    &ResourceMeta::Buffer {
-                        size,
-                        usage,
-                        mapped,
-                    } => (size, usage, mapped),
-                    _ => None?,
-                };
+            .map(|(name, handle)| {
+                let constraints = self.constraints.buffers.get(handle).unwrap();
 
                 // Bind retained resources
                 if let Some(buf) = res.buffers.get(name) {
-                    if buf.size() < size {
-                        Some(Err(RenderGraphError::BufferTooSmall(name.to_string())))
-                    } else if !buf.usage().contains(usage) {
-                        Some(Err(RenderGraphError::MissingBufferUsage(
-                            name.to_string(),
-                            usage.difference(buf.usage()),
-                        )))
-                    } else {
-                        Some(Ok((handle, BufferBinding::Retained(buf))))
+                    if let Some(err) = constraints.verify_retained(buf, name) {
+                        return Err(err);
                     }
+
+                    Ok((handle, BufferBinding::Retained(buf)))
                 }
                 // Create transients
                 else {
                     let buffer = ctx.device.create_buffer(&BufferDescriptor {
                         label: None,
-                        size,
-                        usage,
-                        mapped_at_creation: mapped,
+                        size: constraints.min_size,
+                        usage: constraints.min_usages,
+                        mapped_at_creation: false,
                     });
-                    Some(Ok((handle, BufferBinding::Transient(buffer))))
+                    Ok((handle, BufferBinding::Transient(buffer)))
                 }
             })
-            .collect::<Result<BufferBindings, RenderGraphError>>()?;
+            .collect::<Result<BufferBindings, BufferError>>()?;
 
         let bound_textures: TextureBindings = self
             .virtual_textures
             .iter_names()
-            .filter_map(|(name, handle)| {
-                let (size, mips, samples, format, usage) =
-                    match self.resource_meta.get(&handle.into())? {
-                        ResourceMeta::Texture {
-                            size,
-                            mip_level_count,
-                            sample_count,
-                            format,
-                            usage,
-                            multisampled,
-                        } => (size, mip_level_count, sample_count, format, usage),
-                        _ => None?,
-                    };
+            .map(|(name, handle)| {
+                let constraints =
+                    self.constraints.textures.get(handle).unwrap();
 
                 // Bind retained resources
                 if let Some(texture) = res.textures.get(name) {
-                    Some(Ok((handle, TextureBinding::Retained(texture))))
+                    if let Some(err) = constraints.verify_retained(texture, name) {
+                        return Err(err)
+                    }
+
+                    Ok((handle, TextureBinding::Retained(texture)))
                 }
                 // Create transients
                 else {
-                    let Some(size) = size else { return Some(Err(RenderGraphError::UnconstrainedTextureSize(name.to_string()))) };
-                    let Some(format) = format else { return Some(Err(RenderGraphError::UnconstrainedTextureFormat(name.to_string())))};
-                    let (dimensions, size) = size.into_wgpu();
-                    let texture = ctx.device.create_texture(&TextureDescriptor {
-                        label: None,
+                    let Some(size) = constraints.size else { return Err(TextureError::UnconstrainedTextureSize(name.to_string())) };
+                    let Some(format) = constraints.format else { return Err(TextureError::UnconstrainedTextureFormat(name.to_string())) };
+                    let texture = ctx.texture(
+                        None,
                         size,
-                        mip_level_count: *mips,
-                        sample_count: *samples,
-                        dimension: dimensions,
-                        format: *format,
-                        usage: *usage,
-                    });
-                    Some(Ok((handle, TextureBinding::Transient(texture))))
+                        format,
+                        constraints.min_usages,
+                        constraints.min_mip_level_count,
+                        constraints.min_sample_count,
+                    );
+                    Ok((handle, TextureBinding::Transient(texture)))
                 }
             })
-            .collect::<Result<TextureBindings, RenderGraphError>>()?;
+            .collect::<Result<TextureBindings, TextureError>>()?;
 
         // Make bind groups
-        let bind_groups = self.bind_cache.create_groups(
-            ctx,
-            &self.pipelines,
-            &bound_buffers,
-            &bound_textures,
-            &self.resource_meta,
-        );
+        let bind_groups =
+            self.bind_cache
+                .create_groups(ctx, &self.pipelines, &bound_buffers, &bound_textures);
 
         // Execute render command queue
         let mut encoder = ctx
@@ -337,6 +318,16 @@ impl RenderGraphCompilation<'_> {
                 RenderCommand::WriteBuffer(handle, offset, data) => {
                     let buffer = bound_buffers.get(*handle).unwrap().as_ref();
                     ctx.queue.write_buffer(&buffer, *offset, &data[..]);
+                }
+                RenderCommand::WriteTexture(view, data, layout, size) => {
+                    let texture = bound_textures.get(view.handle).unwrap().as_ref();
+                    let view = ImageCopyTexture {
+                        texture: &texture.inner,
+                        mip_level: view.mip_level,
+                        origin: view.origin,
+                        aspect: view.aspect.into_wgpu(),
+                    };
+                    ctx.queue.write_texture(view, &data[..], *layout, *size);
                 }
                 RenderCommand::ComputePass(label, commands) => {
                     let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {

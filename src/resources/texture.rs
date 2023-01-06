@@ -2,7 +2,11 @@ use std::num::NonZeroU32;
 use std::ops::{Bound, RangeBounds};
 
 use slotmap::{new_key_type, SecondaryMap};
-use wgpu::{Extent3d, Texture, TextureDimension};
+use thiserror::Error;
+use wgpu::{
+    Extent3d, Origin3d, TextureDimension, TextureFormat, TextureFormatFeatureFlags,
+    TextureSampleType, TextureUsages,
+};
 
 use super::ResourceBinding;
 
@@ -20,6 +24,25 @@ impl TextureHandle {
             layer_count: None,
         }
     }
+
+    pub fn copy_view(self, mip_level: u32, origin: Origin3d) -> TextureCopyView {
+        TextureCopyView {
+            handle: self,
+            mip_level,
+            origin,
+            aspect: TextureAspect::All,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Texture {
+    pub inner: wgpu::Texture,
+    pub size: TextureSize,
+    pub format: TextureFormat,
+    pub usage: TextureUsages,
+    pub mip_level_count: u32,
+    pub sample_count: u32,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -116,6 +139,34 @@ impl TextureView {
         self.base_layer = base;
         self.layer_count = count;
         self
+    }
+}
+
+#[derive(Debug)]
+pub struct TextureCopyView {
+    pub(crate) handle: TextureHandle,
+    pub(crate) mip_level: u32,
+    pub(crate) origin: Origin3d,
+    pub(crate) aspect: TextureAspect,
+}
+
+impl TextureCopyView {
+    pub fn stencil_only(self) -> Self {
+        Self {
+            handle: self.handle,
+            mip_level: self.mip_level,
+            origin: self.origin,
+            aspect: TextureAspect::StencilOnly,
+        }
+    }
+
+    pub fn depth_only(self) -> Self {
+        Self {
+            handle: self.handle,
+            mip_level: self.mip_level,
+            origin: self.origin,
+            aspect: TextureAspect::DepthOnly,
+        }
     }
 }
 
@@ -229,6 +280,287 @@ impl TextureAspect {
             TextureAspect::All => wgpu::TextureAspect::All,
             TextureAspect::StencilOnly => wgpu::TextureAspect::StencilOnly,
             TextureAspect::DepthOnly => wgpu::TextureAspect::DepthOnly,
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum TextureError {
+    // Transient
+    #[error(
+        "transient texture `{0}` never has a size specified; 
+    try using `RenderCommands::texture_constraints()` and `TextureConstraints::has_size()`"
+    )]
+    UnconstrainedTextureSize(String),
+    #[error(
+        "transient texture `{0}` is constrained to a size of {2:?} 
+        but a minimum size of {1:?}; try constraining to a larger size with `TextureConstraints::has_size()`
+        or find and reduce the excessive usage"
+    )]
+    SizeLessThanMinSize(String, Extent3d, TextureSize),
+    #[error(
+        "transient texture `{0}` never has a format specified; 
+    try using `RenderCommands::texture_constraints()` and `TextureConstraints::has_format()`"
+    )]
+    UnconstrainedTextureFormat(String),
+    #[error(
+        "transient texture `{0}`'s format does not allow being used as a storage texture,
+    but the texture is used as one"
+    )]
+    FormatNotStorageCompatible(String),
+    #[error(
+        "transient texture `{0}`'s format does not allow being used as a render attachment,
+    but the texture is used as one"
+    )]
+    FormatNotRenderCompatible(String),
+    #[error(
+        "transient texture `{0}`'s format does not allow being multisampled,
+    but the texture is being multisampled"
+    )]
+    FormatNotMultisampleCompatible(String),
+    #[error("transient texture `{0}` has format `{1:?}` that does not allow sample type `{2:?}`")]
+    FormatNotSampleTypeCompatible(String, TextureFormat, TextureSampleType),
+    #[error("transient texture `{0}` was used with a depth aspect but its format {1:?} has no depth aspect")]
+    FormatNotDepth(String, TextureFormat),
+    #[error("transient texture `{0}` was used with a stencil aspect but its format {1:?} has no stencil aspect")]
+    FormatNotStencil(String, TextureFormat),
+    #[error("transient texture `{0}` is used multisampled, but has fewer than 2 samples")]
+    TooFewSamples(String),
+    // Retained
+    #[error("retained texture `{0}` is constrained to a size of {1:?} but was provided with a size of {2:?}")]
+    SizeMismatch(String, TextureSize, TextureSize),
+    #[error("retained texture `{0}` is constrained to a format of {1:?} but was provided with a format of {2:?}")]
+    FormatMismatch(String, TextureFormat, TextureFormat),
+    #[error(
+        "retained texture `{0}` is used with usages {1:?} but was not created with those flags"
+    )]
+    MissingUsages(String, TextureUsages),
+    #[error("retained texture `{0}` is used with {1} mip levels but was created with {2}")]
+    InsufficientMipLevels(String, u32, u32),
+    #[error("retained texture `{0}` is used with {1} samples but was created with {2}")]
+    InsufficientSamples(String, u32, u32),
+}
+
+#[derive(Debug)]
+pub(crate) struct TextureConstraints {
+    pub size: Option<TextureSize>,
+    pub min_size: Extent3d,
+    pub format: Option<TextureFormat>,
+    pub has_depth: bool,
+    pub has_stencil: bool,
+    pub min_mip_level_count: u32,
+    pub min_sample_count: u32,
+    pub min_usages: TextureUsages,
+    pub multisampled: bool,
+    pub sample_type: TextureSampleType,
+}
+
+impl TextureConstraints {
+    pub fn verify(&self, name: &str) -> Option<TextureError> {
+        if let Some(size) = self.size {
+            let (x, y, z) = match size {
+                TextureSize::D1 { x } => (x, 1, 1),
+                TextureSize::D2 { x, y } => (x, y, 1),
+                TextureSize::D3 { x, y, z } => (x, y, z),
+                TextureSize::D2Array { x, y, layers } => (x, y, layers),
+            };
+            if x < self.min_size.width
+                || y < self.min_size.height
+                || z < self.min_size.depth_or_array_layers
+            {
+                return Some(TextureError::SizeLessThanMinSize(
+                    name.into(),
+                    self.min_size,
+                    size,
+                ));
+            }
+        } else {
+            return Some(TextureError::UnconstrainedTextureSize(name.into()));
+        }
+
+        if let Some(format) = self.format {
+            let info = format.describe();
+
+            if self.min_usages.contains(TextureUsages::STORAGE_BINDING)
+                && !info
+                    .guaranteed_format_features
+                    .allowed_usages
+                    .contains(TextureUsages::STORAGE_BINDING)
+            {
+                return Some(TextureError::FormatNotStorageCompatible(name.into()));
+            }
+
+            if self.min_usages.contains(TextureUsages::RENDER_ATTACHMENT)
+                && !info
+                    .guaranteed_format_features
+                    .allowed_usages
+                    .contains(TextureUsages::RENDER_ATTACHMENT)
+            {
+                return Some(TextureError::FormatNotRenderCompatible(name.into()));
+            }
+
+            if self.multisampled
+                && !info
+                    .guaranteed_format_features
+                    .flags
+                    .contains(TextureFormatFeatureFlags::MULTISAMPLE)
+            {
+                return Some(TextureError::FormatNotMultisampleCompatible(name.into()));
+            }
+
+            match (self.sample_type, info.sample_type) {
+                (
+                    TextureSampleType::Float { filterable: true },
+                    TextureSampleType::Float { filterable: true },
+                )
+                | (
+                    TextureSampleType::Float { filterable: false },
+                    TextureSampleType::Float { .. } | TextureSampleType::Depth,
+                )
+                | (TextureSampleType::Uint, TextureSampleType::Uint)
+                | (TextureSampleType::Sint, TextureSampleType::Sint)
+                | (TextureSampleType::Depth, TextureSampleType::Depth) => (),
+                _ => {
+                    return Some(TextureError::FormatNotSampleTypeCompatible(
+                        name.into(),
+                        format,
+                        self.sample_type,
+                    ))
+                }
+            }
+
+            if self.has_depth {
+                match format {
+                    TextureFormat::Depth16Unorm
+                    | TextureFormat::Depth24Plus
+                    | TextureFormat::Depth24PlusStencil8
+                    | TextureFormat::Depth32Float
+                    | TextureFormat::Depth32FloatStencil8 => (),
+                    _ => return Some(TextureError::FormatNotDepth(name.into(), format)),
+                }
+            }
+
+            if self.has_stencil {
+                match format {
+                    TextureFormat::Depth24PlusStencil8 | TextureFormat::Depth32FloatStencil8 => (),
+                    _ => return Some(TextureError::FormatNotStencil(name.into(), format)),
+                }
+            }
+        } else {
+            return Some(TextureError::UnconstrainedTextureFormat(name.into()));
+        }
+
+        if self.multisampled && self.min_sample_count < 2 {
+            return Some(TextureError::TooFewSamples(name.into()));
+        }
+
+        None
+    }
+
+    pub fn verify_retained(&self, tex: &Texture, name: &str) -> Option<TextureError> {
+        let size = self.size.unwrap();
+        let format = self.format.unwrap();
+
+        if tex.size != size {
+            return Some(TextureError::SizeMismatch(name.into(), size, tex.size));
+        }
+        if tex.format != format {
+            return Some(TextureError::FormatMismatch(
+                name.into(),
+                format,
+                tex.format,
+            ));
+        }
+        if !tex.usage.contains(self.min_usages) {
+            return Some(TextureError::MissingUsages(
+                name.into(),
+                self.min_usages.difference(tex.usage),
+            ));
+        }
+        if tex.mip_level_count < self.min_mip_level_count {
+            return Some(TextureError::InsufficientMipLevels(
+                name.into(),
+                self.min_mip_level_count,
+                tex.mip_level_count,
+            ));
+        }
+        if tex.sample_count < self.min_sample_count {
+            return Some(TextureError::InsufficientSamples(
+                name.into(),
+                self.min_sample_count,
+                tex.sample_count,
+            ));
+        }
+        None
+    }
+
+    pub fn set_min_size(&mut self, size: Extent3d) {
+        self.min_size.width = self.min_size.width.max(size.width);
+        self.min_size.height = self.min_size.height.max(size.height);
+        self.min_size.depth_or_array_layers = self
+            .min_size
+            .depth_or_array_layers
+            .max(size.depth_or_array_layers);
+    }
+
+    pub fn set_format(&mut self, format: TextureFormat) {
+        if let Some(old_format) = self.format {
+            assert_eq!(old_format, format, "conflicting texture formats detected; texture constrained or bound with formats {old_format:?} and {format:?}");
+        } else {
+            self.format = Some(format);
+        }
+    }
+
+    pub fn set_mip_count(&mut self, count: u32) {
+        self.min_mip_level_count = self.min_mip_level_count.max(count);
+    }
+
+    pub fn set_sample_count(&mut self, count: u32) {
+        self.min_sample_count = self.min_sample_count.max(count);
+    }
+
+    pub fn set_multisampled(&mut self) {
+        self.multisampled = true;
+    }
+
+    pub fn set_texture_binding(&mut self) {
+        self.min_usages |= TextureUsages::TEXTURE_BINDING;
+    }
+
+    pub fn set_storage_binding(&mut self) {
+        self.min_usages |= TextureUsages::STORAGE_BINDING;
+    }
+
+    pub fn set_render_attachment(&mut self) {
+        self.min_usages |= TextureUsages::RENDER_ATTACHMENT;
+    }
+
+    pub fn set_copy_src(&mut self) {
+        self.min_usages |= TextureUsages::COPY_SRC;
+    }
+
+    pub fn set_copy_dst(&mut self) {
+        self.min_usages |= TextureUsages::COPY_DST;
+    }
+}
+
+impl Default for TextureConstraints {
+    fn default() -> Self {
+        Self {
+            size: None,
+            min_size: Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            format: None,
+            has_depth: false,
+            has_stencil: false,
+            min_mip_level_count: 1,
+            min_sample_count: 1,
+            min_usages: TextureUsages::empty(),
+            multisampled: false,
+            sample_type: TextureSampleType::Float { filterable: true },
         }
     }
 }

@@ -13,8 +13,8 @@ use crate::RenderContext;
 use super::buffer::BufferUse;
 use super::pipeline::PipelineStorage;
 use super::{
-    BindGroupLayoutHandle, BufferBindings, BufferHandle, RenderResources, ResourceHandle,
-    ResourceMeta, TextureAspect, TextureBindings, TextureHandle, TextureViewDimension,
+    BindGroupLayoutHandle, BufferBindings, BufferHandle, RenderResources, ResourceConstraints,
+    ResourceHandle, TextureAspect, TextureBindings, TextureHandle, TextureViewDimension,
 };
 
 pub(crate) type BindGroups = SecondaryMap<BindGroupHandle, BindGroup>;
@@ -64,7 +64,6 @@ impl BindGroupCache {
         pipelines: &PipelineStorage,
         bound_buffers: &BufferBindings,
         bound_textures: &TextureBindings,
-        meta: &FastHashMap<ResourceHandle, ResourceMeta>,
     ) -> BindGroups {
         let mut bind_groups = BindGroups::with_capacity(self.groups.len());
         for (handle, (layout, bindings)) in &self.groups {
@@ -76,20 +75,13 @@ impl BindGroupCache {
             let bindings: Vec<(u32, BoundResource)> = bindings
                 .iter()
                 .map(|&(index, binding)| {
-                    let &meta = meta
-                        .get(&binding.handle())
-                        .expect("all bound resources should have meta associated");
-
-                    let binding = match (binding, meta) {
-                        (
-                            ResourceBinding::Buffer {
-                                handle,
-                                offset,
-                                size,
-                                ..
-                            },
-                            ResourceMeta::Buffer { .. },
-                        ) => BoundResource::Buffer(BufferBinding {
+                    let binding = match binding {
+                        ResourceBinding::Buffer {
+                            handle,
+                            offset,
+                            size,
+                            ..
+                        } => BoundResource::Buffer(BufferBinding {
                             buffer: bound_buffers
                                 .get(handle)
                                 .expect(
@@ -99,22 +91,20 @@ impl BindGroupCache {
                             offset,
                             size,
                         }),
-                        (
-                            ResourceBinding::Texture {
-                                handle,
-                                dimension,
-                                aspect,
-                                base_mip,
-                                mip_count,
-                                base_layer,
-                                layer_count,
-                            },
-                            ResourceMeta::Texture { format, .. },
-                        ) => BoundResource::Texture(
-                            bound_textures.get(handle).unwrap().as_ref().create_view(
+                        ResourceBinding::Texture {
+                            handle,
+                            dimension,
+                            aspect,
+                            base_mip,
+                            mip_count,
+                            base_layer,
+                            layer_count,
+                        } => {
+                            let texture = bound_textures.get(handle).unwrap().as_ref();
+                            BoundResource::Texture(texture.inner.create_view(
                                 &TextureViewDescriptor {
                                     label: None,
-                                    format,
+                                    format: Some(texture.format),
                                     dimension: dimension.map(|dim| dim.into_wgpu()),
                                     aspect: aspect.into_wgpu(),
                                     base_mip_level: base_mip,
@@ -122,9 +112,8 @@ impl BindGroupCache {
                                     base_array_layer: base_layer,
                                     array_layer_count: layer_count,
                                 },
-                            ),
-                        ),
-                        _ => panic!("resource use and resource type must match"),
+                            ))
+                        }
                     };
                     (index, binding)
                 })

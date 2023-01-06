@@ -2,7 +2,8 @@ use std::num::NonZeroU64;
 use std::ops::RangeBounds;
 
 use slotmap::{new_key_type, SecondaryMap};
-use wgpu::Buffer;
+use thiserror::Error;
+use wgpu::{Buffer, BufferUsages};
 
 use super::{RWMode, ResourceBinding};
 
@@ -142,3 +143,63 @@ impl<'b> AsRef<Buffer> for BufferBinding<'b> {
 }
 
 pub(crate) type BufferBindings<'b> = SecondaryMap<BufferHandle, BufferBinding<'b>>;
+
+#[derive(Debug, Error)]
+pub enum BufferError {
+    #[error("the retained buffer `{0}` has size {1} when its minimum size based on usage is {2}")]
+    TooSmall(String, u64, u64),
+    #[error(
+        "the retained buffer `{0}` is used with usages `{1:?}` but was not created with those flags"
+    )]
+    MissingUsages(String, BufferUsages),
+}
+
+#[derive(Debug)]
+pub(crate) struct BufferConstraints {
+    pub min_size: u64,
+    pub min_usages: BufferUsages,
+}
+
+impl BufferConstraints {
+    pub fn verify_retained(&self, buffer: &Buffer, name: &str) -> Option<BufferError> {
+        if buffer.size() < self.min_size {
+            return Some(BufferError::TooSmall(
+                name.into(),
+                buffer.size(),
+                self.min_size,
+            ));
+        }
+        if !buffer.usage().contains(self.min_usages) {
+            return Some(BufferError::MissingUsages(
+                name.into(),
+                self.min_usages.difference(buffer.usage()),
+            ));
+        }
+        None
+    }
+
+    pub fn set_size(&mut self, size: u64) {
+        self.min_size = self.min_size.max(size);
+    }
+
+    pub fn set_usages(&mut self, usage: BufferUsages) {
+        self.min_usages |= usage;
+    }
+
+    pub fn set_uniform(&mut self) {
+        self.min_usages |= BufferUsages::UNIFORM;
+    }
+
+    pub fn set_storage(&mut self) {
+        self.min_usages |= BufferUsages::STORAGE;
+    }
+}
+
+impl Default for BufferConstraints {
+    fn default() -> Self {
+        Self {
+            min_size: 0,
+            min_usages: BufferUsages::empty(),
+        }
+    }
+}

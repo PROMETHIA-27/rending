@@ -1,24 +1,26 @@
 use std::borrow::{Borrow, Cow};
 use std::collections::BTreeMap;
 
+use slotmap::SecondaryMap;
+use thiserror::Error;
 use wgpu::{
-    Buffer, BufferUsages, Extent3d, Texture, TextureDimension, TextureFormat, TextureUsages,
+    Buffer, BufferUsages, Extent3d, TextureDimension, TextureFormat, TextureFormatFeatureFlags,
+    TextureSampleType, TextureUsages,
 };
 
 use crate::bitset::Bitset;
 use crate::named_slotmap::NamedSlotMap;
 
 pub(crate) use self::bindgroup::{BindGroupCache, BindGroupHandle, ResourceBinding};
-pub(crate) use self::buffer::{BufferBinding, BufferBindings, BufferUse};
-pub use self::buffer::{BufferHandle, BufferSlice};
+pub(crate) use self::buffer::{BufferBinding, BufferBindings, BufferConstraints, BufferUse};
+pub use self::buffer::{BufferError, BufferHandle, BufferSlice};
 pub use self::layout::BindGroupLayout;
 pub use self::layout::{BindGroupLayoutHandle, PipelineLayout, PipelineLayoutHandle};
 pub use self::module::ShaderModule;
-use self::pipeline::ComputePipelines;
 pub use self::pipeline::{ComputePipeline, ComputePipelineHandle, PipelineStorage};
-pub use self::texture::{TextureAspect, TextureSize};
+pub use self::texture::{Texture, TextureAspect, TextureCopyView, TextureError, TextureSize};
 pub(crate) use self::texture::{
-    TextureBinding, TextureBindings, TextureHandle, TextureViewDimension,
+    TextureBinding, TextureBindings, TextureConstraints, TextureHandle, TextureViewDimension,
 };
 
 mod bindgroup;
@@ -105,134 +107,8 @@ impl NodeResourceAccess {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub enum ResourceMeta {
-    Buffer {
-        size: u64,
-        usage: BufferUsages,
-        mapped: bool,
-    },
-    Texture {
-        size: Option<TextureSize>,
-        mip_level_count: u32,
-        sample_count: u32,
-        format: Option<TextureFormat>,
-        usage: TextureUsages,
-        multisampled: bool,
-    },
-}
-
-impl ResourceMeta {
-    pub fn default_from_handle(handle: ResourceHandle) -> Self {
-        match handle {
-            ResourceHandle::Buffer(_) => ResourceMeta::Buffer {
-                size: 0,
-                usage: BufferUsages::empty(),
-                mapped: false,
-            },
-            ResourceHandle::Texture(_) => ResourceMeta::Texture {
-                size: None,
-                mip_level_count: 1,
-                sample_count: 1,
-                format: None,
-                usage: TextureUsages::empty(),
-                multisampled: false,
-            },
-        }
-    }
-
-    pub fn set_buffer_size(&mut self, size: u64) {
-        match self {
-            ResourceMeta::Buffer { size: buf_size, .. } => *buf_size = (*buf_size).max(size),
-            _ => panic!("attempted to bind a non-buffer resource to a buffer slot"),
-        }
-    }
-
-    pub fn set_uniform_buffer(&mut self) {
-        match self {
-            ResourceMeta::Buffer { usage, .. } => *usage |= BufferUsages::UNIFORM,
-            _ => panic!("attempted to bind a non-buffer resource to a buffer slot"),
-        }
-    }
-
-    pub fn set_storage_buffer(&mut self) {
-        match self {
-            ResourceMeta::Buffer { usage, .. } => *usage |= BufferUsages::STORAGE,
-            _ => panic!("attempted to bind a non-buffer resource to a buffer slot"),
-        }
-    }
-
-    pub fn set_format(&mut self, format: TextureFormat) {
-        let new_format = format;
-        match self {
-            ResourceMeta::Texture { format, .. } => {
-                if let Some(format) = format {
-                    assert_eq!(*format, new_format, "conflicting texture formats detected; texture constrained or bound with formats {format:?} and {new_format:?}");
-                } else {
-                    *format = Some(new_format);
-                }
-            }
-            _ => panic!("attempted to bind a non-texture resource to a texture slot"),
-        }
-    }
-
-    pub fn set_mip_count(&mut self, count: u32) {
-        match self {
-            ResourceMeta::Texture {
-                mip_level_count, ..
-            } => *mip_level_count = (*mip_level_count).max(count),
-            _ => panic!("attempted to bind a non-texture resource to a texture slot"),
-        }
-    }
-
-    pub fn set_sample_count(&mut self, count: u32) {
-        match self {
-            ResourceMeta::Texture { sample_count, .. } => {
-                *sample_count = (*sample_count).max(count)
-            }
-            _ => panic!("attempted to bind a non-texture resource to a texture slot"),
-        }
-    }
-
-    pub fn set_multisampled(&mut self) {
-        match self {
-            ResourceMeta::Texture { multisampled, .. } => *multisampled = true,
-            _ => panic!("attempted to bind a non-texture resource to a texture slot"),
-        }
-    }
-
-    pub fn set_texture_binding(&mut self) {
-        match self {
-            ResourceMeta::Texture { usage, .. } => *usage |= TextureUsages::TEXTURE_BINDING,
-            _ => panic!("attempted to bind a non-texture resource to a texture slot"),
-        }
-    }
-
-    pub fn set_storage_binding(&mut self) {
-        match self {
-            ResourceMeta::Texture { usage, .. } => *usage |= TextureUsages::STORAGE_BINDING,
-            _ => panic!("attempted to bind a non-texture resource to a texture slot"),
-        }
-    }
-
-    pub fn set_render_attachment(&mut self) {
-        match self {
-            ResourceMeta::Texture { usage, .. } => *usage |= TextureUsages::RENDER_ATTACHMENT,
-            _ => panic!("attempted to bind a non-texture resource to a texture slot"),
-        }
-    }
-
-    pub fn set_copy_src(&mut self) {
-        match self {
-            ResourceMeta::Buffer { usage, .. } => *usage |= BufferUsages::COPY_SRC,
-            ResourceMeta::Texture { usage, .. } => *usage |= TextureUsages::COPY_SRC,
-        }
-    }
-
-    pub fn set_copy_dst(&mut self) {
-        match self {
-            ResourceMeta::Buffer { usage, .. } => *usage |= BufferUsages::COPY_DST,
-            ResourceMeta::Texture { usage, .. } => *usage |= TextureUsages::COPY_DST,
-        }
-    }
+#[derive(Debug, Default)]
+pub(crate) struct ResourceConstraints {
+    pub buffers: SecondaryMap<BufferHandle, BufferConstraints>,
+    pub textures: SecondaryMap<TextureHandle, TextureConstraints>,
 }

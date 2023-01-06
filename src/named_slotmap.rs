@@ -69,6 +69,14 @@ impl<K: Key, V> NamedSlotMap<K, V> {
         self.slotmap.iter_mut()
     }
 
+    pub fn iter_keys(&self) -> impl Iterator<Item = K> + '_ {
+        self.slotmap.keys()
+    }
+
+    pub fn iter_values(&self) -> impl Iterator<Item = &V> {
+        self.slotmap.values()
+    }
+
     pub fn drain_key_value(&mut self) -> impl Iterator<Item = (K, V)> + '_ {
         self.slotmap.drain()
     }
