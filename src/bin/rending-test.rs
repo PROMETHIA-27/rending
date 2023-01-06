@@ -30,17 +30,7 @@ fn main() {
     let ctx = RenderContext::new(&device, &queue);
 
     // TODO:
-    // ctx.buffer()
-    //    .size(4)
-    //    .copy_dst()
-    //    .map_read()
-    //    .create();
-    let staging = ctx.device.create_buffer(&BufferDescriptor {
-        label: None,
-        size: 16,
-        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+    let staging = ctx.buffer().size(16).copy_dst().map_read().create();
 
     let pipeline = ctx
         .compute_pipeline(

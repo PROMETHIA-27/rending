@@ -10,7 +10,7 @@ mod spirv_iter;
 mod util;
 
 pub use commands::RenderCommands;
-pub use context::RenderContext;
+pub use context::{BufferBuilder, RenderContext};
 pub use graph::{RenderGraph, RenderGraphCompilation, RenderGraphError};
 pub use node::RenderNode;
 pub use reflect::{

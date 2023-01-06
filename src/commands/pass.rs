@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use smallvec::SmallVec;
 
 use crate::resources::{
@@ -236,7 +234,7 @@ impl ComputePassCommands<'_, '_, '_> {
                             }
                         }
                     }
-                    // TODO: Make good error messages for screwy bindings
+                    // TODO: Make good error messages for when binding does not match slot type
                     (binding, bind_ty) => panic!("Uh oh! {binding:?} ||| {bind_ty:?}"),
                 }
             }
