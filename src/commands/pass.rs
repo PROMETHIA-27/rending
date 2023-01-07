@@ -1,7 +1,10 @@
+use std::num::NonZeroU32;
+
 use smallvec::SmallVec;
+use wgpu::Extent3d;
 
 use crate::resources::{
-    BindGroupHandle, BufferUse, ComputePipelineHandle, RWMode, ResourceBinding,
+    BindGroupHandle, BufferUse, ComputePipelineHandle, RWMode, ResourceBinding, TextureAspect,
     TextureViewDimension,
 };
 
@@ -80,8 +83,8 @@ impl ComputePassCommands<'_, '_, '_> {
                 .get(layout.groups[group_index as usize])
                 .unwrap();
 
-            for (binding, resource) in binding.iter_mut() {
-                let entry = group_layout.entries[*binding as usize];
+            for &mut (binding, ref mut resource) in binding.iter_mut() {
+                let entry = group_layout.entries[binding as usize];
 
                 match (resource, entry.ty) {
                     (
@@ -90,7 +93,6 @@ impl ComputePassCommands<'_, '_, '_> {
                             offset,
                             size,
                             usage,
-                            ..
                         },
                         wgpu::BindingType::Buffer {
                             ty,
@@ -150,14 +152,14 @@ impl ComputePassCommands<'_, '_, '_> {
                         }
                     }
                     (
-                        ResourceBinding::Texture {
+                        &mut ResourceBinding::Texture {
                             handle,
-                            dimension,
+                            ref mut dimension,
                             base_mip,
                             mip_count,
                             base_layer,
                             layer_count,
-                            ..
+                            aspect,
                         },
                         wgpu::BindingType::Texture {
                             sample_type,
@@ -165,8 +167,6 @@ impl ComputePassCommands<'_, '_, '_> {
                             multisampled,
                         },
                     ) => {
-                        // TODO: Constrain layer count somehow
-                        let (handle, base_mip, mip_count) = (*handle, *base_mip, *mip_count);
                         let constraints = commands
                             .constraints
                             .textures
@@ -178,6 +178,18 @@ impl ComputePassCommands<'_, '_, '_> {
                             None => base_mip,
                         };
                         constraints.set_mip_count(min_mips);
+                        constraints.set_min_size(Extent3d {
+                            width: 0,
+                            height: 0,
+                            depth_or_array_layers: base_layer
+                                + layer_count.map(NonZeroU32::get).unwrap_or(0),
+                        });
+                        match aspect {
+                            TextureAspect::StencilOnly => constraints.has_stencil = true,
+                            TextureAspect::DepthOnly => constraints.has_depth = true,
+                            _ => (),
+                        }
+                        constraints.set_sample_type(sample_type);
 
                         *dimension = Some(TextureViewDimension::from_wgpu(view_dimension));
 
@@ -189,14 +201,14 @@ impl ComputePassCommands<'_, '_, '_> {
                         commands.mark_resource_read(handle.into());
                     }
                     (
-                        ResourceBinding::Texture {
+                        &mut ResourceBinding::Texture {
                             handle,
-                            dimension,
+                            ref mut dimension,
                             base_mip,
                             mip_count,
                             base_layer,
                             layer_count,
-                            ..
+                            aspect,
                         },
                         wgpu::BindingType::StorageTexture {
                             access,
@@ -204,7 +216,6 @@ impl ComputePassCommands<'_, '_, '_> {
                             view_dimension,
                         },
                     ) => {
-                        let (handle, base_mip, mip_count) = (*handle, *base_mip, *mip_count);
                         let constraints = commands
                             .constraints
                             .textures
@@ -216,6 +227,17 @@ impl ComputePassCommands<'_, '_, '_> {
                             None => base_mip,
                         };
                         constraints.set_mip_count(min_mips);
+                        constraints.set_min_size(Extent3d {
+                            width: 0,
+                            height: 0,
+                            depth_or_array_layers: base_layer
+                                + layer_count.map(NonZeroU32::get).unwrap_or(0),
+                        });
+                        match aspect {
+                            TextureAspect::StencilOnly => constraints.has_stencil = true,
+                            TextureAspect::DepthOnly => constraints.has_depth = true,
+                            _ => (),
+                        }
 
                         *dimension = Some(TextureViewDimension::from_wgpu(view_dimension));
 

@@ -320,6 +320,10 @@ pub enum TextureError {
     FormatNotMultisampleCompatible(String),
     #[error("transient texture `{0}` has format `{1:?}` that does not allow sample type `{2:?}`")]
     FormatNotSampleTypeCompatible(String, TextureFormat, TextureSampleType),
+    #[error(
+        "transient texture `{0}` was used with conflicting texture sample types {1:?} and {2:?}"
+    )]
+    ConflictingTextureSampleTypes(String, TextureSampleType, TextureSampleType),
     #[error("transient texture `{0}` was used with a depth aspect but its format {1:?} has no depth aspect")]
     FormatNotDepth(String, TextureFormat),
     #[error("transient texture `{0}` was used with a stencil aspect but its format {1:?} has no stencil aspect")]
@@ -342,6 +346,13 @@ pub enum TextureError {
 }
 
 #[derive(Debug)]
+pub(crate) enum TextureSampleTypeConstraint {
+    Unconstrained,
+    Conflicted(TextureSampleType, TextureSampleType),
+    Constrained(TextureSampleType),
+}
+
+#[derive(Debug)]
 pub(crate) struct TextureConstraints {
     pub size: Option<TextureSize>,
     pub min_size: Extent3d,
@@ -352,7 +363,7 @@ pub(crate) struct TextureConstraints {
     pub min_sample_count: u32,
     pub min_usages: TextureUsages,
     pub multisampled: bool,
-    pub sample_type: TextureSampleType,
+    pub sample_type: TextureSampleTypeConstraint,
 }
 
 impl TextureConstraints {
@@ -408,27 +419,6 @@ impl TextureConstraints {
                 return Some(TextureError::FormatNotMultisampleCompatible(name.into()));
             }
 
-            match (self.sample_type, info.sample_type) {
-                (
-                    TextureSampleType::Float { filterable: true },
-                    TextureSampleType::Float { filterable: true },
-                )
-                | (
-                    TextureSampleType::Float { filterable: false },
-                    TextureSampleType::Float { .. } | TextureSampleType::Depth,
-                )
-                | (TextureSampleType::Uint, TextureSampleType::Uint)
-                | (TextureSampleType::Sint, TextureSampleType::Sint)
-                | (TextureSampleType::Depth, TextureSampleType::Depth) => (),
-                _ => {
-                    return Some(TextureError::FormatNotSampleTypeCompatible(
-                        name.into(),
-                        format,
-                        self.sample_type,
-                    ))
-                }
-            }
-
             if self.has_depth {
                 match format {
                     TextureFormat::Depth16Unorm
@@ -437,6 +427,43 @@ impl TextureConstraints {
                     | TextureFormat::Depth32Float
                     | TextureFormat::Depth32FloatStencil8 => (),
                     _ => return Some(TextureError::FormatNotDepth(name.into(), format)),
+                }
+            }
+
+            match self.sample_type {
+                TextureSampleTypeConstraint::Unconstrained => (),
+                TextureSampleTypeConstraint::Conflicted(left, right) => {
+                    return Some(TextureError::ConflictingTextureSampleTypes(
+                        name.into(),
+                        left,
+                        right,
+                    ))
+                }
+                TextureSampleTypeConstraint::Constrained(sample_type) => {
+                    match (info.sample_type, sample_type) {
+                        (TextureSampleType::Depth, TextureSampleType::Depth)
+                        | (
+                            TextureSampleType::Depth,
+                            TextureSampleType::Float { filterable: false },
+                        )
+                        | (
+                            TextureSampleType::Float { filterable: true },
+                            TextureSampleType::Float { .. },
+                        )
+                        | (
+                            TextureSampleType::Float { filterable: false },
+                            TextureSampleType::Float { filterable: false },
+                        )
+                        | (TextureSampleType::Sint, TextureSampleType::Sint)
+                        | (TextureSampleType::Uint, TextureSampleType::Uint) => (),
+                        _ => {
+                            return Some(TextureError::FormatNotSampleTypeCompatible(
+                                name.into(),
+                                format,
+                                sample_type,
+                            ))
+                        }
+                    }
                 }
             }
 
@@ -515,10 +542,6 @@ impl TextureConstraints {
         self.min_mip_level_count = self.min_mip_level_count.max(count);
     }
 
-    pub fn set_sample_count(&mut self, count: u32) {
-        self.min_sample_count = self.min_sample_count.max(count);
-    }
-
     pub fn set_multisampled(&mut self) {
         self.multisampled = true;
     }
@@ -542,6 +565,37 @@ impl TextureConstraints {
     pub fn set_copy_dst(&mut self) {
         self.min_usages |= TextureUsages::COPY_DST;
     }
+
+    pub fn set_sample_type(&mut self, ty: TextureSampleType) {
+        match self.sample_type {
+            TextureSampleTypeConstraint::Unconstrained => {
+                self.sample_type = TextureSampleTypeConstraint::Constrained(ty)
+            }
+            TextureSampleTypeConstraint::Conflicted(_, _) => (),
+            TextureSampleTypeConstraint::Constrained(old_ty) => match (old_ty, ty) {
+                // Upgrade
+                (
+                    TextureSampleType::Float { filterable: false },
+                    TextureSampleType::Float { filterable: true } | TextureSampleType::Depth,
+                ) => self.sample_type = TextureSampleTypeConstraint::Constrained(ty),
+                // Compatible
+                (
+                    TextureSampleType::Float { filterable: true },
+                    TextureSampleType::Float { .. },
+                )
+                | (
+                    TextureSampleType::Float { filterable: false },
+                    TextureSampleType::Float { filterable: false },
+                )
+                | (TextureSampleType::Depth, TextureSampleType::Depth)
+                | (TextureSampleType::Depth, TextureSampleType::Float { filterable: false })
+                | (TextureSampleType::Sint, TextureSampleType::Sint)
+                | (TextureSampleType::Uint, TextureSampleType::Uint) => (),
+                // Incompatible
+                _ => self.sample_type = TextureSampleTypeConstraint::Conflicted(old_ty, ty),
+            },
+        }
+    }
 }
 
 impl Default for TextureConstraints {
@@ -560,7 +614,7 @@ impl Default for TextureConstraints {
             min_sample_count: 1,
             min_usages: TextureUsages::empty(),
             multisampled: false,
-            sample_type: TextureSampleType::Float { filterable: true },
+            sample_type: TextureSampleTypeConstraint::Unconstrained,
         }
     }
 }
