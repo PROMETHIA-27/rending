@@ -3,9 +3,8 @@ use std::num::NonZeroU32;
 
 use rending::*;
 use wgpu::{
-    Backends, BufferDescriptor, BufferUsages, DeviceDescriptor, Extent3d, Features,
-    ImageDataLayout, Instance, Limits, MapMode, Origin3d, PowerPreference, RequestAdapterOptions,
-    TextureFormat,
+    Backends, DeviceDescriptor, Extent3d, Features, ImageDataLayout, Instance, Limits, MapMode,
+    Origin3d, PowerPreference, RequestAdapterOptions, TextureFormat,
 };
 
 fn main() {
@@ -29,7 +28,6 @@ fn main() {
 
     let ctx = RenderContext::new(&device, &queue);
 
-    // TODO:
     let staging = ctx.buffer().size(16).copy_dst().map_read().create();
 
     let pipeline = ctx
@@ -52,7 +50,7 @@ fn main() {
 
     println!("{graph:#?}");
 
-    let mut comp = graph.compile(ctx, &pipelines).unwrap();
+    let mut comp = graph.compile(&pipelines).unwrap();
 
     println!("{comp:#?}");
 

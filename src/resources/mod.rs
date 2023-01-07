@@ -1,15 +1,10 @@
-use std::borrow::{Borrow, Cow};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use slotmap::SecondaryMap;
-use thiserror::Error;
-use wgpu::{
-    Buffer, BufferUsages, Extent3d, TextureDimension, TextureFormat, TextureFormatFeatureFlags,
-    TextureSampleType, TextureUsages,
-};
+use wgpu::Buffer;
 
 use crate::bitset::Bitset;
-use crate::named_slotmap::NamedSlotMap;
 
 pub(crate) use self::bindgroup::{BindGroupCache, BindGroupHandle, ResourceBinding};
 pub(crate) use self::buffer::{BufferBinding, BufferBindings, BufferConstraints, BufferUse};
@@ -58,12 +53,6 @@ impl RenderResources {
     pub fn insert_texture(&mut self, name: impl Into<Cow<'static, str>>, texture: Texture) {
         self.textures.insert(name.into(), texture);
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ResourceType {
-    Buffer,
-    Texture,
 }
 
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

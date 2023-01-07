@@ -1,10 +1,7 @@
-use naga::{FastHashMap, FastHashSet};
+use naga::FastHashSet;
 use slotmap::SecondaryMap;
 use thiserror::Error;
-use wgpu::{
-    BufferDescriptor, BufferUsages, CommandEncoderDescriptor, ComputePassDescriptor,
-    ImageCopyTexture, ImageDataLayout, TextureDescriptor,
-};
+use wgpu::{BufferDescriptor, CommandEncoderDescriptor, ComputePassDescriptor, ImageCopyTexture};
 
 use crate::bitset::Bitset;
 use crate::commands::{
@@ -12,11 +9,11 @@ use crate::commands::{
     VirtualBuffers, VirtualTextures,
 };
 use crate::named_slotmap::NamedSlotMap;
-use crate::node::{NodeKey, OrderingList, RenderNode, RenderNodeMeta};
+use crate::node::{NodeKey, RenderNode, RenderNodeMeta};
 use crate::resources::{
     BindGroupCache, BufferBinding, BufferBindings, BufferError, NodeResourceAccess,
-    PipelineStorage, RenderResources, ResourceConstraints, ResourceHandle, TextureBinding,
-    TextureBindings, TextureError,
+    PipelineStorage, RenderResources, ResourceConstraints, TextureBinding, TextureBindings,
+    TextureError,
 };
 use crate::RenderContext;
 
@@ -62,7 +59,6 @@ impl RenderGraph {
 
     pub fn compile<'g>(
         &'g mut self,
-        ctx: RenderContext,
         pipelines: &'g PipelineStorage,
     ) -> Result<RenderGraphCompilation, RenderGraphError> {
         // Map of { dependent: dependencies }
@@ -217,7 +213,6 @@ impl RenderGraph {
         }
 
         Ok(RenderGraphCompilation {
-            graph: self,
             pipelines,
             queue,
             bind_cache,
@@ -229,9 +224,8 @@ impl RenderGraph {
 }
 
 #[derive(Debug)]
-pub struct RenderGraphCompilation<'g> {
-    graph: &'g RenderGraph,
-    pipelines: &'g PipelineStorage,
+pub struct RenderGraphCompilation<'p> {
+    pipelines: &'p PipelineStorage,
     queue: Vec<RenderCommand>,
     bind_cache: BindGroupCache,
     constraints: ResourceConstraints,

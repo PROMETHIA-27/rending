@@ -1,11 +1,10 @@
 use std::collections::BTreeMap;
 use std::num::{NonZeroU32, NonZeroU64};
 
-use naga::FastHashMap;
 use slotmap::{new_key_type, SecondaryMap, SlotMap};
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, BufferBinding, Texture,
-    TextureView, TextureViewDescriptor,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, BufferBinding, TextureView,
+    TextureViewDescriptor,
 };
 
 use crate::RenderContext;
@@ -13,8 +12,8 @@ use crate::RenderContext;
 use super::buffer::BufferUse;
 use super::pipeline::PipelineStorage;
 use super::{
-    BindGroupLayoutHandle, BufferBindings, BufferHandle, RenderResources, ResourceConstraints,
-    ResourceHandle, TextureAspect, TextureBindings, TextureHandle, TextureViewDimension,
+    BindGroupLayoutHandle, BufferBindings, BufferHandle, TextureAspect, TextureBindings,
+    TextureHandle, TextureViewDimension,
 };
 
 pub(crate) type BindGroups = SecondaryMap<BindGroupHandle, BindGroup>;
@@ -159,22 +158,6 @@ pub enum ResourceBinding {
         base_layer: u32,
         layer_count: Option<NonZeroU32>,
     },
-}
-
-impl ResourceBinding {
-    pub(crate) fn handle(&self) -> ResourceHandle {
-        match self {
-            &ResourceBinding::Buffer { handle, .. } => handle.into(),
-            &ResourceBinding::Texture { handle, .. } => handle.into(),
-        }
-    }
-
-    pub(crate) fn buffer_use(&self) -> BufferUse {
-        match self {
-            &ResourceBinding::Buffer { usage, .. } => usage,
-            _ => panic!("attempted to bind a non-buffer resource to a buffer slot"),
-        }
-    }
 }
 
 enum BoundResource<'b> {

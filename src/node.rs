@@ -22,38 +22,10 @@ pub trait RenderNode {
     fn run(commands: &mut RenderCommands);
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct NodeInput {
-    pub resource: Cow<'static, str>,
-}
-
-impl NodeInput {
-    pub fn new(resource: impl Into<Cow<'static, str>>) -> Self {
-        Self {
-            resource: resource.into(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct NodeOutput {
-    pub resource: Cow<'static, str>,
-}
-
-impl NodeOutput {
-    pub fn new(name: impl Into<Cow<'static, str>>) -> Self {
-        Self {
-            resource: name.into(),
-        }
-    }
-}
-
-pub(crate) type OrderingList = FastHashSet<Cow<'static, str>>;
-
 #[derive(Clone)]
 pub struct RenderNodeMeta {
-    pub(crate) before: OrderingList,
-    pub(crate) after: OrderingList,
+    pub(crate) before: FastHashSet<Cow<'static, str>>,
+    pub(crate) after: FastHashSet<Cow<'static, str>>,
     pub(crate) run_fn: fn(&mut RenderCommands),
     pub(crate) type_name: Option<&'static str>,
 }
