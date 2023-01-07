@@ -9,10 +9,14 @@ use crate::bitset::Bitset;
 pub(crate) use self::bindgroup::{BindGroupCache, BindGroupHandle, ResourceBinding};
 pub(crate) use self::buffer::{BufferBinding, BufferBindings, BufferConstraints, BufferUse};
 pub use self::buffer::{BufferError, BufferHandle, BufferSlice};
-pub use self::layout::BindGroupLayout;
-pub use self::layout::{BindGroupLayoutHandle, PipelineLayout, PipelineLayoutHandle};
-pub use self::module::ShaderModule;
-pub use self::pipeline::{ComputePipeline, ComputePipelineHandle, PipelineStorage};
+pub use self::layout::{
+    BindGroupLayout, BindGroupLayoutHandle, PipelineLayout, PipelineLayoutHandle,
+};
+pub use self::module::{module_from_source, ModuleError, ShaderModule, ShaderSource};
+pub use self::pipeline::{
+    compute_pipeline_from_module, ComputePipeline, ComputePipelineHandle, PipelineError,
+    PipelineStorage, ReflectedComputePipeline,
+};
 pub use self::texture::{Texture, TextureAspect, TextureCopyView, TextureError, TextureSize};
 pub(crate) use self::texture::{
     TextureBinding, TextureBindings, TextureConstraints, TextureHandle, TextureViewDimension,
@@ -23,6 +27,7 @@ mod buffer;
 mod layout;
 mod module;
 mod pipeline;
+mod sampler;
 mod texture;
 
 pub(crate) type Buffers = BTreeMap<Cow<'static, str>, Buffer>;

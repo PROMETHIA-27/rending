@@ -6,7 +6,7 @@ use wgpu::{
 };
 
 use crate::spirv_iter::SpirvIterator;
-use crate::{reflect, PipelineError};
+use crate::PipelineError;
 use crate::{ReflectedComputePipeline, ShaderSource, Texture, TextureSize};
 
 #[derive(Copy, Clone)]
@@ -72,9 +72,10 @@ impl<'d, 'q> RenderContext<'d, 'q> {
         P: AsRef<Path>,
         I: SpirvIterator,
     {
-        let module = reflect::module_from_source(self, shader)?;
+        let module = crate::resources::module_from_source(self, shader)?;
 
-        let pipeline = reflect::compute_pipeline_from_module(self, &module, entry_point, label)?;
+        let pipeline =
+            crate::resources::compute_pipeline_from_module(self, &module, entry_point, label)?;
 
         Ok(pipeline)
     }
