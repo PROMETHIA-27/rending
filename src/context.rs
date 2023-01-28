@@ -52,6 +52,8 @@ impl<'d, 'q> RenderContext<'d, 'q> {
                 dimension,
                 format,
                 usage,
+                // TODO: Make this part configurable
+                view_formats: &[format],
             })
         };
         Texture {

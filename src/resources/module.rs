@@ -117,7 +117,7 @@ pub fn module_from_source<I: SpirvIterator, P: AsRef<Path>>(
                     CreateShaderModuleError::from(wgpu_core::pipeline::ShaderError {
                         source: String::new(),
                         label: None,
-                        inner: err,
+                        inner: Box::new(err),
                     })
                 })?;
             (module, info)
@@ -132,7 +132,7 @@ pub fn module_from_source<I: SpirvIterator, P: AsRef<Path>>(
                     CreateShaderModuleError::from(wgpu_core::pipeline::ShaderError {
                         source: String::new(),
                         label: None,
-                        inner: err,
+                        inner: Box::new(err),
                     })
                 })?;
             (module, info)
@@ -144,7 +144,7 @@ pub fn module_from_source<I: SpirvIterator, P: AsRef<Path>>(
                 CreateShaderModuleError::from(wgpu_core::pipeline::ShaderError {
                     source: source.to_string(),
                     label: None,
-                    inner: err,
+                    inner: Box::new(err),
                 })
             })?;
             let info = naga::valid::Validator::new(ValidationFlags::all(), Capabilities::all())
@@ -153,7 +153,7 @@ pub fn module_from_source<I: SpirvIterator, P: AsRef<Path>>(
                     CreateShaderModuleError::from(wgpu_core::pipeline::ShaderError {
                         source: source.to_string(),
                         label: None,
-                        inner: err,
+                        inner: Box::new(err),
                     })
                 })?;
             (module, info)

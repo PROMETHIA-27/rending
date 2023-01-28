@@ -420,13 +420,21 @@ impl TextureConstraints {
                 return Some(TextureError::FormatNotRenderCompatible(name.into()));
             }
 
-            if self.multisampled
-                && !info
+            match self.min_sample_count {
+                1 => {}
+                2 if info
                     .guaranteed_format_features
                     .flags
-                    .contains(TextureFormatFeatureFlags::MULTISAMPLE)
-            {
-                return Some(TextureError::FormatNotMultisampleCompatible(name.into()));
+                    .contains(TextureFormatFeatureFlags::MULTISAMPLE_X2) => {}
+                4 if info
+                    .guaranteed_format_features
+                    .flags
+                    .contains(TextureFormatFeatureFlags::MULTISAMPLE_X4) => {}
+                8 if info
+                    .guaranteed_format_features
+                    .flags
+                    .contains(TextureFormatFeatureFlags::MULTISAMPLE_X8) => {}
+                _ => return Some(TextureError::FormatNotMultisampleCompatible(name.into())),
             }
 
             if self.has_depth {
@@ -485,10 +493,6 @@ impl TextureConstraints {
             }
         } else {
             return Some(TextureError::UnconstrainedTextureFormat(name.into()));
-        }
-
-        if self.multisampled && self.min_sample_count < 2 {
-            return Some(TextureError::TooFewSamples(name.into()));
         }
 
         None

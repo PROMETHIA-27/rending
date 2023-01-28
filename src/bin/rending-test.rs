@@ -4,12 +4,16 @@ use std::num::NonZeroU32;
 
 use rending::*;
 use wgpu::{
-    AddressMode, Backends, DeviceDescriptor, Extent3d, Features, ImageDataLayout, Instance, Limits,
-    MapMode, Origin3d, PowerPreference, RequestAdapterOptions, TextureFormat,
+    AddressMode, Backends, DeviceDescriptor, Dx12Compiler, Extent3d, Features, ImageDataLayout,
+    Instance, InstanceDescriptor, Limits, MapMode, Origin3d, PowerPreference,
+    RequestAdapterOptions, TextureFormat,
 };
 
 fn main() {
-    let instance = Instance::new(Backends::PRIMARY);
+    let instance = Instance::new(InstanceDescriptor {
+        backends: Backends::PRIMARY,
+        dx12_shader_compiler: Dx12Compiler::default(),
+    });
     let adapter =
         futures_lite::future::block_on(instance.request_adapter(&RequestAdapterOptions {
             power_preference: PowerPreference::HighPerformance,
