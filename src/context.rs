@@ -1,10 +1,12 @@
 use std::path::Path;
 
+use naga::{FastHashSet, ResourceBinding};
 use wgpu::{
-    Buffer, BufferDescriptor, BufferUsages, Device, Label, Queue, TextureDescriptor, TextureFormat,
-    TextureUsages,
+    AddressMode, Buffer, BufferDescriptor, BufferUsages, Device, FilterMode, Label, Queue,
+    SamplerDescriptor, TextureDescriptor, TextureFormat, TextureUsages,
 };
 
+// use crate::resources::Sampler;
 use crate::spirv_iter::SpirvIterator;
 use crate::PipelineError;
 use crate::{ReflectedComputePipeline, ShaderSource, Texture, TextureSize};
@@ -62,11 +64,44 @@ impl<'d, 'q> RenderContext<'d, 'q> {
         }
     }
 
+    // TODO: Samplerbuilder
+    // pub fn sampler(&self) -> Sampler {
+    //     let sampler = self.device.create_sampler(&SamplerDescriptor {
+    //         label: None,
+    //         address_mode_u: AddressMode::default(),
+    //         address_mode_v: AddressMode::default(),
+    //         address_mode_w: AddressMode::default(),
+    //         mag_filter: FilterMode::default(),
+    //         min_filter: FilterMode::default(),
+    //         mipmap_filter: FilterMode::default(),
+    //         lod_min_clamp: 0.0,
+    //         lod_max_clamp: 0.0,
+    //         compare: None,
+    //         anisotropy_clamp: None,
+    //         border_color: None,
+    //     });
+    //     Sampler {
+    //         wgpu: sampler,
+    //         address_mode_u: AddressMode::default(),
+    //         address_mode_v: AddressMode::default(),
+    //         address_mode_w: AddressMode::default(),
+    //         mag_filter: FilterMode::default(),
+    //         min_filter: FilterMode::default(),
+    //         mipmap_filter: FilterMode::default(),
+    //         lod_min_clamp: 0.0,
+    //         lod_max_clamp: 0.0,
+    //         compare: None,
+    //         anisotropy_clamp: None,
+    //         border_color: None,
+    //     }
+    // }
+
     pub fn compute_pipeline<I, P>(
         &self,
         label: Label,
         shader: ShaderSource<I, P>,
         entry_point: &str,
+        non_filtering_samplers: &FastHashSet<ResourceBinding>,
     ) -> Result<ReflectedComputePipeline, PipelineError>
     where
         P: AsRef<Path>,
@@ -74,8 +109,13 @@ impl<'d, 'q> RenderContext<'d, 'q> {
     {
         let module = crate::resources::module_from_source(self, shader)?;
 
-        let pipeline =
-            crate::resources::compute_pipeline_from_module(self, &module, entry_point, label)?;
+        let pipeline = crate::resources::compute_pipeline_from_module(
+            self,
+            &module,
+            entry_point,
+            non_filtering_samplers,
+            label,
+        )?;
 
         Ok(pipeline)
     }

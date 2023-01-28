@@ -12,8 +12,9 @@ use crate::RenderContext;
 use super::buffer::BufferUse;
 use super::pipeline::PipelineStorage;
 use super::{
-    BindGroupLayoutHandle, BufferBindings, BufferHandle, TextureAspect, TextureBindings,
-    TextureHandle, TextureViewDimension,
+    BindGroupLayoutHandle, BufferBindings,
+    BufferHandle, /* Sampler, SamplerBindings, SamplerHandle,*/
+    TextureAspect, TextureBindings, TextureHandle, TextureSampleType, TextureViewDimension,
 };
 
 pub(crate) type BindGroups = SecondaryMap<BindGroupHandle, BindGroup>;
@@ -63,6 +64,7 @@ impl BindGroupCache {
         pipelines: &PipelineStorage,
         bound_buffers: &BufferBindings,
         bound_textures: &TextureBindings,
+        // bound_samplers: &SamplerBindings,
     ) -> BindGroups {
         let mut bind_groups = BindGroups::with_capacity(self.groups.len());
         for (handle, (layout, bindings)) in &self.groups {
@@ -112,7 +114,10 @@ impl BindGroupCache {
                                     array_layer_count: layer_count,
                                 },
                             ))
-                        }
+                        } // ResourceBinding::Sampler { handle } => {
+                          //     let sampler = bound_samplers.get(handle).unwrap().as_ref();
+                          //     BoundResource::Sampler(sampler)
+                          // }
                     };
                     (index, binding)
                 })
@@ -125,6 +130,7 @@ impl BindGroupCache {
                     resource: match binding {
                         BoundResource::Buffer(binding) => BindingResource::Buffer(binding.clone()),
                         BoundResource::Texture(view) => BindingResource::TextureView(view),
+                        // BoundResource::Sampler(sampler) => BindingResource::Sampler(&sampler.wgpu),
                     },
                 })
                 .collect();
@@ -158,9 +164,13 @@ pub enum ResourceBinding {
         base_layer: u32,
         layer_count: Option<NonZeroU32>,
     },
+    // Sampler {
+    //     handle: SamplerHandle,
+    // },
 }
 
-enum BoundResource<'b> {
-    Buffer(BufferBinding<'b>),
+enum BoundResource<'a> {
+    Buffer(BufferBinding<'a>),
     Texture(TextureView),
+    // Sampler(&'a Sampler),
 }

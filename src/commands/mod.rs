@@ -1,12 +1,15 @@
 use std::borrow::{Borrow, Cow};
+use std::collections::BTreeMap;
 
+use naga::FastHashMap;
 use wgpu::{BufferUsages, Extent3d, ImageDataLayout, TextureFormat};
 
 use crate::named_slotmap::NamedSlotMap;
 use crate::resources::{
     BindGroupCache, BufferConstraints, BufferHandle, ComputePipelineHandle, NodeResourceAccess,
-    PipelineStorage, ResourceConstraints, ResourceHandle, TextureAspect, TextureCopyView,
-    TextureHandle, TextureSize,
+    PipelineStorage, ResourceConstraints,
+    ResourceHandle, /*SamplerConstraints, SamplerHandle,*/
+    TextureAspect, TextureCopyView, TextureHandle, TextureSize,
 };
 
 pub(crate) use self::pass::{ComputePassCommand, ComputePassCommands};
@@ -25,6 +28,8 @@ pub(crate) type ResourceList = Vec<(Cow<'static, str>, ResourceHandle)>;
 pub(crate) type ResourceAccesses = Vec<NodeResourceAccess>;
 pub(crate) type VirtualBuffers = NamedSlotMap<BufferHandle, usize>;
 pub(crate) type VirtualTextures = NamedSlotMap<TextureHandle, usize>;
+// pub(crate) type VirtualSamplers = NamedSlotMap<SamplerHandle, usize>;
+// pub(crate) type SamplerRev<'c> = FastHashMap<&'c SamplerConstraints, SamplerHandle>;
 
 pub struct RenderCommands<'q, 'r> {
     /// Access pipelines for getting handles and dispatch, etc.
@@ -45,6 +50,8 @@ pub struct RenderCommands<'q, 'r> {
     pub(crate) virtual_buffers: VirtualBuffers,
     /// Virtual handles for each accessed texture
     pub(crate) virtual_textures: VirtualTextures,
+    // /// Virtual handles for each accessed sampler
+    // pub(crate) virtual_samplers: VirtualSamplers,
 }
 
 impl<'q, 'r> RenderCommands<'q, 'r> {
@@ -76,7 +83,10 @@ impl<'q, 'r> RenderCommands<'q, 'r> {
             ResourceHandle::Texture(handle) => {
                 let &index = self.virtual_textures.get(handle).unwrap();
                 self.resource_accesses[self.node_index].reads.insert(index);
-            }
+            } // ResourceHandle::Sampler(handle) => {
+              //     let &index = self.virtual_samplers.get(handle).unwrap();
+              //     self.resource_accesses[self.node_index].reads.insert(index);
+              // }
         }
     }
 
@@ -89,7 +99,10 @@ impl<'q, 'r> RenderCommands<'q, 'r> {
             ResourceHandle::Texture(handle) => {
                 let &index = self.virtual_textures.get(handle).unwrap();
                 self.resource_accesses[self.node_index].writes.insert(index);
-            }
+            } // ResourceHandle::Sampler(handle) => {
+              //     let &index = self.virtual_samplers.get(handle).unwrap();
+              //     self.resource_accesses[self.node_index].writes.insert(index);
+              // }
         }
     }
 
@@ -118,6 +131,19 @@ impl<'q, 'r> RenderCommands<'q, 'r> {
             }
         }
     }
+
+    // pub fn sampler(&mut self, name: impl Into<Cow<'static, str>> + Borrow<str>) -> SamplerHandle {
+    //     match self.virtual_samplers.get_key(name.borrow()) {
+    //         Some(handle) => handle,
+    //         None => {
+    //             let name = name.into();
+    //             let index = self.resources.len();
+    //             let handle = self.virtual_samplers.insert(name.clone(), index);
+    //             self.resources.push((name, handle.into()));
+    //             handle
+    //         }
+    //     }
+    // }
 
     pub fn texture_constraints(&mut self, texture: TextureHandle) -> TextureConstraints {
         let constraints = self
@@ -240,3 +266,70 @@ impl TextureConstraints<'_> {
         self
     }
 }
+
+// impl<'l> SamplerParams<'_, '_, '_, 'l> {
+//     pub fn get_handle(&mut self) -> SamplerHandle {
+//         todo!()
+//         // use the sampler cache
+//     }
+
+//     pub fn label(&mut self, label: Label<'l>) -> &mut Self {
+//         self.label = label;
+//         self
+//     }
+
+//     pub fn address_mode_u(&mut self, mode: AddressMode) -> &mut Self {
+//         self.address_mode_u = mode;
+//         self
+//     }
+
+//     pub fn address_mode_v(&mut self, mode: AddressMode) -> &mut Self {
+//         self.address_mode_v = mode;
+//         self
+//     }
+
+//     pub fn address_mode_w(&mut self, mode: AddressMode) -> &mut Self {
+//         self.address_mode_w = mode;
+//         self
+//     }
+
+//     pub fn mag_filter(&mut self, mode: FilterMode) -> &mut Self {
+//         self.mag_filter = mode;
+//         self
+//     }
+
+//     pub fn min_filter(&mut self, mode: FilterMode) -> &mut Self {
+//         self.min_filter = mode;
+//         self
+//     }
+
+//     pub fn mipmap_filter(&mut self, mode: FilterMode) -> &mut Self {
+//         self.mipmap_filter = mode;
+//         self
+//     }
+
+//     pub fn lod_min_clamp(&mut self, clamp: f32) -> &mut Self {
+//         self.lod_min_clamp = clamp;
+//         self
+//     }
+
+//     pub fn lod_max_clamp(&mut self, clamp: f32) -> &mut Self {
+//         self.lod_max_clamp = clamp;
+//         self
+//     }
+
+//     pub fn compare(&mut self, compare: CompareFunction) -> &mut Self {
+//         self.compare = Some(compare);
+//         self
+//     }
+
+//     pub fn aniso_clamp(&mut self, clamp: NonZeroU8) -> &mut Self {
+//         self.anisotropy_clamp = Some(clamp);
+//         self
+//     }
+
+//     pub fn border_color(&mut self, color: SamplerBorderColor) -> &mut Self {
+//         self.border_color = Some(color);
+//         self
+//     }
+// }

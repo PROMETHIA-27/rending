@@ -4,8 +4,7 @@ use std::ops::{Bound, RangeBounds};
 use slotmap::{new_key_type, SecondaryMap};
 use thiserror::Error;
 use wgpu::{
-    Extent3d, Origin3d, TextureDimension, TextureFormat, TextureFormatFeatureFlags,
-    TextureSampleType, TextureUsages,
+    Extent3d, Origin3d, TextureDimension, TextureFormat, TextureFormatFeatureFlags, TextureUsages,
 };
 
 use super::ResourceBinding;
@@ -48,7 +47,6 @@ pub struct Texture {
 #[derive(Debug, Copy, Clone)]
 pub struct TextureView {
     handle: TextureHandle,
-    // dimensions: Option<TextureViewDimension>,
     aspect: TextureAspect,
     base_mip: u32,
     mip_count: Option<NonZeroU32>,
@@ -76,26 +74,6 @@ impl TextureView {
             layer_count,
         }
     }
-
-    // pub fn d2(&mut self) -> &mut Self {
-    //     self.dimensions = Some(TextureViewDimension::D2);
-    //     self
-    // }
-
-    // pub fn d2_array(&mut self) -> &mut Self {
-    //     self.dimensions = Some(TextureViewDimension::D2Array);
-    //     self
-    // }
-
-    // pub fn cube(&mut self) -> &mut Self {
-    //     self.dimensions = Some(TextureViewDimension::Cube);
-    //     self
-    // }
-
-    // pub fn cube_array(&mut self) -> &mut Self {
-    //     self.dimensions = Some(TextureViewDimension::CubeArray);
-    //     self
-    // }
 
     pub fn depth_only(&mut self) -> &mut Self {
         self.aspect = TextureAspect::DepthOnly;
@@ -284,6 +262,38 @@ impl TextureAspect {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TextureSampleType {
+    Float { filterable: bool },
+    Depth,
+    Uint,
+    Sint,
+}
+
+impl TextureSampleType {
+    pub fn from_wgpu(wgpu: wgpu::TextureSampleType) -> Self {
+        match wgpu {
+            wgpu::TextureSampleType::Float { filterable } => {
+                TextureSampleType::Float { filterable }
+            }
+            wgpu::TextureSampleType::Depth => TextureSampleType::Depth,
+            wgpu::TextureSampleType::Uint => TextureSampleType::Uint,
+            wgpu::TextureSampleType::Sint => TextureSampleType::Sint,
+        }
+    }
+
+    pub fn to_wgpu(self) -> wgpu::TextureSampleType {
+        match self {
+            TextureSampleType::Float { filterable } => {
+                wgpu::TextureSampleType::Float { filterable }
+            }
+            TextureSampleType::Depth => wgpu::TextureSampleType::Depth,
+            TextureSampleType::Uint => wgpu::TextureSampleType::Uint,
+            TextureSampleType::Sint => wgpu::TextureSampleType::Sint,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum TextureError {
     // Transient
@@ -441,21 +451,21 @@ impl TextureConstraints {
                 }
                 TextureSampleTypeConstraint::Constrained(sample_type) => {
                     match (info.sample_type, sample_type) {
-                        (TextureSampleType::Depth, TextureSampleType::Depth)
+                        (wgpu::TextureSampleType::Depth, TextureSampleType::Depth)
                         | (
-                            TextureSampleType::Depth,
+                            wgpu::TextureSampleType::Depth,
                             TextureSampleType::Float { filterable: false },
                         )
                         | (
-                            TextureSampleType::Float { filterable: true },
+                            wgpu::TextureSampleType::Float { filterable: true },
                             TextureSampleType::Float { .. },
                         )
                         | (
-                            TextureSampleType::Float { filterable: false },
+                            wgpu::TextureSampleType::Float { filterable: false },
                             TextureSampleType::Float { filterable: false },
                         )
-                        | (TextureSampleType::Sint, TextureSampleType::Sint)
-                        | (TextureSampleType::Uint, TextureSampleType::Uint) => (),
+                        | (wgpu::TextureSampleType::Sint, TextureSampleType::Sint)
+                        | (wgpu::TextureSampleType::Uint, TextureSampleType::Uint) => (),
                         _ => {
                             return Some(TextureError::FormatNotSampleTypeCompatible(
                                 name.into(),

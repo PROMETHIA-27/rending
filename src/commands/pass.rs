@@ -5,7 +5,7 @@ use wgpu::Extent3d;
 
 use crate::resources::{
     BindGroupHandle, BufferUse, ComputePipelineHandle, RWMode, ResourceBinding, TextureAspect,
-    TextureViewDimension,
+    TextureSampleType, TextureViewDimension,
 };
 
 use super::{RenderCommand, RenderCommands};
@@ -189,7 +189,7 @@ impl ComputePassCommands<'_, '_, '_> {
                             TextureAspect::DepthOnly => constraints.has_depth = true,
                             _ => (),
                         }
-                        constraints.set_sample_type(sample_type);
+                        constraints.set_sample_type(TextureSampleType::from_wgpu(sample_type));
 
                         *dimension = Some(TextureViewDimension::from_wgpu(view_dimension));
 
@@ -256,6 +256,18 @@ impl ComputePassCommands<'_, '_, '_> {
                             }
                         }
                     }
+                    // (
+                    //     &mut ResourceBinding::Sampler { handle },
+                    //     wgpu::BindingType::Sampler(binding_ty),
+                    // ) => {
+                    //     let constraints = commands
+                    //         .constraints
+                    //         .samplers
+                    //         .entry(handle)
+                    //         .unwrap()
+                    //         .or_default();
+                    //     constraints.set_type(binding_ty);
+                    // }
                     // TODO: Make good error messages for when binding does not match slot type
                     (binding, bind_ty) => panic!("Uh oh! {binding:?} ||| {bind_ty:?}"),
                 }

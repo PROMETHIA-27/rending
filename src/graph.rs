@@ -1,18 +1,23 @@
 use naga::FastHashSet;
 use slotmap::SecondaryMap;
 use thiserror::Error;
-use wgpu::{BufferDescriptor, CommandEncoderDescriptor, ComputePassDescriptor, ImageCopyTexture};
+use wgpu::{
+    AddressMode, BufferDescriptor, CommandEncoderDescriptor, ComputePassDescriptor, FilterMode,
+    ImageCopyTexture, SamplerDescriptor,
+};
 
 use crate::bitset::Bitset;
 use crate::commands::{
-    ComputePassCommand, RenderCommand, RenderCommands, ResourceAccesses, ResourceList,
-    VirtualBuffers, VirtualTextures,
+    ComputePassCommand, RenderCommand, RenderCommands, ResourceAccesses,
+    ResourceList, /*SamplerRev,*/
+    VirtualBuffers, /*VirtualSamplers,*/ VirtualTextures,
 };
 use crate::named_slotmap::NamedSlotMap;
 use crate::node::{NodeKey, RenderNode, RenderNodeMeta};
 use crate::resources::{
     BindGroupCache, BufferBinding, BufferBindings, BufferError, NodeResourceAccess,
-    PipelineStorage, RenderResources, ResourceConstraints, TextureBinding, TextureBindings,
+    PipelineStorage, RenderResources, ResourceConstraints,
+    /* SamplerBinding, SamplerBindings, SamplerError,*/ TextureBinding, TextureBindings,
     TextureError,
 };
 use crate::RenderContext;
@@ -30,6 +35,8 @@ pub enum RenderGraphError {
     Buffer(#[from] BufferError),
     #[error(transparent)]
     Texture(#[from] TextureError),
+    // #[error(transparent)]
+    // Sampler(#[from] SamplerError),
 }
 
 #[derive(Debug)]
@@ -146,6 +153,7 @@ impl RenderGraph {
             ),
             virtual_buffers: VirtualBuffers::new(),
             virtual_textures: VirtualTextures::new(),
+            // virtual_samplers: VirtualSamplers::new(),
         };
 
         for (index, node) in nodes
@@ -201,8 +209,22 @@ impl RenderGraph {
         let RenderCommands {
             virtual_buffers,
             virtual_textures,
+            // mut virtual_samplers,
             ..
         } = commands;
+
+        // Unify samplers based on parameters
+        // let mut samplers_rev = SamplerRev::default();
+        // for (_, handle) in virtual_samplers.iter_names_mut() {
+        //     let constraints = constraints.samplers.get(*handle).unwrap();
+        //     *handle = match samplers_rev.get(constraints) {
+        //         Some(handle) => *handle,
+        //         None => {
+        //             samplers_rev.insert(constraints, *handle);
+        //             *handle
+        //         }
+        //     };
+        // }
 
         // Verify constraints
         for (name, texture) in virtual_textures.iter_names() {
@@ -212,6 +234,13 @@ impl RenderGraph {
             }
         }
 
+        // for (name, handle) in virtual_samplers.iter_names() {
+        //     let constraints = constraints.samplers.get(handle).unwrap();
+        //     if let Some(err) = constraints.verify(name) {
+        //         return Err(err.into());
+        //     }
+        // }
+
         Ok(RenderGraphCompilation {
             pipelines,
             queue,
@@ -219,6 +248,7 @@ impl RenderGraph {
             constraints,
             virtual_buffers,
             virtual_textures,
+            // virtual_samplers,
         })
     }
 }
@@ -231,6 +261,7 @@ pub struct RenderGraphCompilation<'p> {
     constraints: ResourceConstraints,
     virtual_buffers: VirtualBuffers,
     virtual_textures: VirtualTextures,
+    // virtual_samplers: VirtualSamplers,
 }
 
 impl RenderGraphCompilation<'_> {
@@ -298,10 +329,36 @@ impl RenderGraphCompilation<'_> {
             })
             .collect::<Result<TextureBindings, TextureError>>()?;
 
+        // Verify retained sampler constraints
+        // for (handle, constraints) in self.constraints.samplers.iter() {}
+
+        // let bound_samplers: SamplerBindings = self
+        //     .virtual_samplers
+        //     .iter_keys()
+        //     .map(|handle| {
+        //         let constraints = self.constraints.samplers.get(handle).unwrap();
+
+        //         // // Bind retained
+        //         // if let Some(sampler) = res.samplers.get(name) {
+        //         //     // TODO: Erase retained samplers' names and get them based off of constraints
+        //         //     (handle, SamplerBinding::Retained(sampler))
+        //         // } else {
+        //         //     let sampler = ctx.sampler();
+        //         //     (handle, SamplerBinding::Transient(sampler))
+        //         // }
+        //         let sampler = ctx.sampler();
+        //         (handle, SamplerBinding::Transient(sampler))
+        //     })
+        //     .collect();
+
         // Make bind groups
-        let bind_groups =
-            self.bind_cache
-                .create_groups(ctx, &self.pipelines, &bound_buffers, &bound_textures);
+        let bind_groups = self.bind_cache.create_groups(
+            ctx,
+            &self.pipelines,
+            &bound_buffers,
+            &bound_textures,
+            // &bound_samplers,
+        );
 
         // Execute render command queue
         let mut encoder = ctx

@@ -19,6 +19,7 @@ naga = "0.10"
 slotmap = "1.0"
 thiserror = "1.0"
 wgpu-core = "0.14.0"
+fixed = "1.21.0"
 
 [dependencies.smallvec]
 version = "1.10"

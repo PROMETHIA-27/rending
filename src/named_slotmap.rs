@@ -85,6 +85,12 @@ impl<K: Key, V> NamedSlotMap<K, V> {
         self.names.iter().map(|(name, &key)| (&name[..], key))
     }
 
+    pub fn iter_names_mut(&mut self) -> impl Iterator<Item = (&str, &mut K)> {
+        self.names
+            .iter_mut()
+            .map(|(name, handle)| (&name[..], handle))
+    }
+
     pub fn split_mut(&mut self) -> (KeyMap<K, V>, NameMap<K>) {
         (
             KeyMap {
@@ -94,6 +100,10 @@ impl<K: Key, V> NamedSlotMap<K, V> {
                 map: &mut self.names,
             },
         )
+    }
+
+    pub fn remap_name(&mut self, name: &str, new_handle: K) {
+        *self.names.get_mut(name).unwrap() = new_handle;
     }
 }
 

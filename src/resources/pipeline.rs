@@ -2,8 +2,8 @@ use std::borrow::Cow;
 use std::num::NonZeroU64;
 
 use naga::{
-    AddressSpace, FastHashSet, ImageClass, ImageDimension, ShaderStage, StorageAccess,
-    StorageFormat, TypeInner,
+    AddressSpace, FastHashSet, GlobalVariable, Handle, ImageClass, ImageDimension, ResourceBinding,
+    ShaderStage, StorageAccess, StorageFormat, TypeInner,
 };
 use slotmap::{new_key_type, SlotMap};
 use thiserror::Error;
@@ -108,6 +108,7 @@ pub fn compute_pipeline_from_module(
     ctx: &RenderContext,
     module: &ShaderModule,
     entry_point: &str,
+    nonfiltering_samplers: &FastHashSet<ResourceBinding>,
     label: Label,
 ) -> Result<ReflectedComputePipeline, PipelineError> {
     let (point_index, point) = module
@@ -133,13 +134,28 @@ pub fn compute_pipeline_from_module(
 
     let resources = globals.iter().filter_map(|handle| {
         let global = module.module.global_variables.try_get(*handle).unwrap();
-        (global.binding.is_some()).then_some(global)
+        (global.binding.is_some()).then_some((handle, global))
     });
+
+    let filtered: FastHashSet<Handle<GlobalVariable>> = point_info
+        .sampling_set
+        .iter()
+        .filter_map(|key| {
+            let sampler = &module.module.global_variables[key.sampler];
+            let ty = &module.module.types[sampler.ty];
+            match ty.inner {
+                TypeInner::Sampler { .. } => (!nonfiltering_samplers
+                    .contains(&sampler.binding.clone().unwrap()))
+                .then_some(key.image),
+                _ => unreachable!(),
+            }
+        })
+        .collect();
 
     let mut groups: [Vec<BindGroupLayoutEntry>; wgpu_core::MAX_BIND_GROUPS] =
         std::array::from_fn(|_| vec![]);
 
-    for resource in resources {
+    for (handle, resource) in resources {
         let binding = resource.binding.as_ref().unwrap();
 
         if binding.group as usize >= wgpu_core::MAX_BIND_GROUPS {
@@ -171,10 +187,15 @@ pub fn compute_pipeline_from_module(
                     dim,
                     arrayed,
                     class,
-                } => match_image(dim, arrayed, class),
+                } => match_image(dim, arrayed, class, filtered.contains(handle)),
                 TypeInner::Sampler { comparison } => BindingType::Sampler(match comparison {
                     true => wgpu::SamplerBindingType::Comparison,
-                    false => wgpu::SamplerBindingType::Filtering, // TODO: Add options to select NonFiltering instead if desired
+                    false => {
+                        match nonfiltering_samplers.contains(&resource.binding.clone().unwrap()) {
+                            true => wgpu::SamplerBindingType::NonFiltering,
+                            false => wgpu::SamplerBindingType::Filtering,
+                        }
+                    }
                 }),
                 _ => unreachable!("a handle should be an image or sampler"),
             },
@@ -238,7 +259,12 @@ pub fn compute_pipeline_from_module(
     })
 }
 
-fn match_image(dim: ImageDimension, arrayed: bool, class: ImageClass) -> BindingType {
+fn match_image(
+    dim: ImageDimension,
+    arrayed: bool,
+    class: ImageClass,
+    filtered: bool,
+) -> BindingType {
     let view_dim = match (dim, arrayed) {
         (naga::ImageDimension::D1, false) => wgpu::TextureViewDimension::D1,
         (naga::ImageDimension::D2, false) => wgpu::TextureViewDimension::D2,
@@ -256,10 +282,9 @@ fn match_image(dim: ImageDimension, arrayed: bool, class: ImageClass) -> Binding
             sample_type: match kind {
                 naga::ScalarKind::Sint => wgpu::TextureSampleType::Sint,
                 naga::ScalarKind::Uint => wgpu::TextureSampleType::Uint,
-                naga::ScalarKind::Float => {
-                    wgpu::TextureSampleType::Float { filterable: true }
-                    // TODO: Only set this if any associated samplers are filtering
-                }
+                naga::ScalarKind::Float => wgpu::TextureSampleType::Float {
+                    filterable: filtered,
+                },
                 naga::ScalarKind::Bool => {
                     unreachable!("images cannot be of type bool")
                 }

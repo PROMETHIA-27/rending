@@ -1,10 +1,11 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::num::NonZeroU32;
 
 use rending::*;
 use wgpu::{
-    Backends, DeviceDescriptor, Extent3d, Features, ImageDataLayout, Instance, Limits, MapMode,
-    Origin3d, PowerPreference, RequestAdapterOptions, TextureFormat,
+    AddressMode, Backends, DeviceDescriptor, Extent3d, Features, ImageDataLayout, Instance, Limits,
+    MapMode, Origin3d, PowerPreference, RequestAdapterOptions, TextureFormat,
 };
 
 fn main() {
@@ -35,6 +36,7 @@ fn main() {
             Some("compute_levels pipeline"),
             ShaderSource::wgsl_file_path("test.wgsl"),
             "main",
+            &HashSet::default(),
         )
         .unwrap();
 
