@@ -13,7 +13,7 @@ use crate::commands::{
     VirtualBuffers, /*VirtualSamplers,*/ VirtualTextures,
 };
 use crate::named_slotmap::NamedSlotMap;
-use crate::node::{NodeKey, RenderNode, RenderNodeMeta};
+use crate::node::{NodeKey, RenderNodeMeta};
 use crate::resources::{
     BindGroupCache, BufferBinding, BufferBindings, BufferError, NodeResourceAccess,
     PipelineStorage, RenderResources, ResourceConstraints,
@@ -52,16 +52,9 @@ impl RenderGraph {
         }
     }
 
-    pub fn add_node<T: RenderNode>(&mut self) {
-        let meta = RenderNodeMeta {
-            // Vec::into_iter is used over .into_iter so that this errors if I change the functions to not be Vec
-            before: Vec::into_iter(T::before()).collect(),
-            after: Vec::into_iter(T::after()).collect(),
-            run_fn: T::run,
-            type_name: Some(std::any::type_name::<T>()),
-        };
-
-        self.nodes.insert(T::name(), meta);
+    pub fn add_node(&mut self, node: impl Into<RenderNodeMeta>) {
+        let meta = node.into();
+        self.nodes.insert(meta.name.clone(), meta);
     }
 
     pub fn compile<'g>(

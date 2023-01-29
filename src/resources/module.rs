@@ -19,6 +19,7 @@ pub struct ShaderModule {
     pub(crate) info: naga::valid::ModuleInfo,
 }
 
+// TODO: Wrap this in a struct so that variants aren't visible
 #[non_exhaustive]
 pub enum ShaderSource<I: SpirvIterator, P: AsRef<Path>> {
     Spirv(I),

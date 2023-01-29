@@ -5,7 +5,5 @@ var tex: texture_2d<f32>;
 
 @compute @workgroup_size(1)
 fn main() {
-    _ = chunk;
-
     chunk = textureLoad(tex, vec2(0, 0), 0);
 }
