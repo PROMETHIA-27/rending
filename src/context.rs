@@ -2,8 +2,9 @@ use std::path::Path;
 
 use naga::{FastHashSet, ResourceBinding};
 use wgpu::{
-    AddressMode, Buffer, BufferDescriptor, BufferUsages, Device, FilterMode, Label, Queue,
-    SamplerDescriptor, TextureDescriptor, TextureFormat, TextureUsages,
+    AddressMode, Buffer, BufferDescriptor, BufferSlice, BufferUsages, BufferView, BufferViewMut,
+    Device, FilterMode, Label, MaintainBase, MapMode, Queue, SamplerDescriptor, TextureDescriptor,
+    TextureFormat, TextureUsages,
 };
 
 // use crate::resources::Sampler;
@@ -120,6 +121,18 @@ impl<'d, 'q> RenderContext<'d, 'q> {
         )?;
 
         Ok(pipeline)
+    }
+
+    pub fn read_map_buffer<'b>(&self, slice: &'b BufferSlice) -> BufferView<'b> {
+        slice.map_async(MapMode::Read, |_| ());
+        self.device.poll(MaintainBase::Wait);
+        slice.get_mapped_range()
+    }
+
+    pub fn write_map_buffer<'b>(&self, slice: &'b BufferSlice) -> BufferViewMut<'b> {
+        slice.map_async(MapMode::Write, |_| ());
+        self.device.poll(MaintainBase::Wait);
+        slice.get_mapped_range_mut()
     }
 }
 

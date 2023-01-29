@@ -38,16 +38,15 @@ fn main() {
 
     compiled.run(context, &resources).unwrap();
 
-    let slice = resources.get_buffer("staging").unwrap().slice(..);
-    slice.map_async(MapMode::Read, |_| ());
-    context.device.poll(MaintainBase::Wait);
-    println!(
-        "{:?}",
-        &slice.get_mapped_range()[..]
-            .chunks_exact(4)
-            .map(|data| f32::from_ne_bytes(data.try_into().unwrap()))
-            .collect::<Vec<_>>()
-    );
+    let staging = resources.get_buffer("staging").unwrap();
+    let vals: Vec<f32> = context
+        .read_map_buffer(&staging.slice(..))
+        .chunks_exact(4)
+        .map(<[u8; 4]>::try_from)
+        .map(Result::unwrap)
+        .map(f32::from_ne_bytes)
+        .collect();
+    println!("{vals:?}");
 }
 
 fn compute_levels(commands: &mut RenderCommands) {
