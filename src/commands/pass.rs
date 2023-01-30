@@ -23,6 +23,7 @@ pub struct ComputePassCommands<'c, 'q, 'r> {
     pub(crate) commands: &'c mut RenderCommands<'q, 'r>,
     pub(crate) command_index: usize,
     pub(crate) pipeline: Option<ComputePipelineHandle>,
+    // TODO: This is a **heavy** array being passed by value
     pub(crate) bindings: [Option<TempBindings>; wgpu_core::MAX_BIND_GROUPS],
 }
 
@@ -84,7 +85,7 @@ impl ComputePassCommands<'_, '_, '_> {
                 .unwrap();
 
             for &mut (binding, ref mut resource) in binding.iter_mut() {
-                let entry = group_layout.entries[binding as usize];
+                let Some(entry) = group_layout.entries.get(&binding) else { continue };
 
                 match (resource, entry.ty) {
                     (

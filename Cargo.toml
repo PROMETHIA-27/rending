@@ -24,3 +24,6 @@ features = ["union", "const_generics"]
 [dependencies.wgpu]
 version = "0.15"
 features = ["spirv"]
+
+[dev-dependencies]
+image = { version = "0.24", default-features = false, features = ["jpeg"] }

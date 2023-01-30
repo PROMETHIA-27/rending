@@ -267,7 +267,7 @@ impl RenderGraphCompilation<'_> {
             .virtual_buffers
             .iter_names()
             .map(|(name, handle)| {
-                let constraints = self.constraints.buffers.get(handle).unwrap();
+                let Some(constraints) = self.constraints.buffers.get(handle) else { panic!("failed to acquire constraints for buffer `{name}`")};
 
                 // Bind retained resources
                 if let Some(buf) = res.buffers.get(name) {
@@ -412,11 +412,10 @@ impl RenderGraphCompilation<'_> {
 fn do_nodes_conflict(cmd: &RenderCommands, left: usize, right: usize) -> bool {
     let (left, right) = (&cmd.resource_accesses[left], &cmd.resource_accesses[right]);
 
-    if left.reads.intersects_with(&right.writes) {
-        true
-    } else if right.reads.intersects_with(&left.writes) {
-        true
-    } else if left.writes.intersects_with(&right.writes) {
+    if left.reads.intersects_with(&right.writes)
+        || right.reads.intersects_with(&left.writes)
+        || left.writes.intersects_with(&right.writes)
+    {
         true
     } else {
         false

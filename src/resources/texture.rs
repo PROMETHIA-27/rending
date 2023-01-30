@@ -395,8 +395,6 @@ impl TextureConstraints {
                     size,
                 ));
             }
-        } else {
-            return Some(TextureError::UnconstrainedTextureSize(name.into()));
         }
 
         if let Some(format) = self.format {
@@ -491,27 +489,28 @@ impl TextureConstraints {
                     _ => return Some(TextureError::FormatNotStencil(name.into(), format)),
                 }
             }
-        } else {
-            return Some(TextureError::UnconstrainedTextureFormat(name.into()));
         }
 
         None
     }
 
     pub fn verify_retained(&self, tex: &Texture, name: &str) -> Option<TextureError> {
-        let size = self.size.unwrap();
-        let format = self.format.unwrap();
+        if let Some(size) = self.size {
+            if tex.size != size {
+                return Some(TextureError::SizeMismatch(name.into(), size, tex.size));
+            }
+        }
 
-        if tex.size != size {
-            return Some(TextureError::SizeMismatch(name.into(), size, tex.size));
+        if let Some(format) = self.format {
+            if tex.format != format {
+                return Some(TextureError::FormatMismatch(
+                    name.into(),
+                    format,
+                    tex.format,
+                ));
+            }
         }
-        if tex.format != format {
-            return Some(TextureError::FormatMismatch(
-                name.into(),
-                format,
-                tex.format,
-            ));
-        }
+
         if !tex.usage.contains(self.min_usages) {
             return Some(TextureError::MissingUsages(
                 name.into(),

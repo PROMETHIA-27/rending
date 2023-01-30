@@ -2,8 +2,8 @@ use std::borrow::Cow;
 use std::num::NonZeroU64;
 
 use naga::{
-    AddressSpace, FastHashSet, GlobalVariable, Handle, ImageClass, ImageDimension, ResourceBinding,
-    ShaderStage, StorageAccess, StorageFormat, TypeInner,
+    AddressSpace, FastHashMap, FastHashSet, GlobalVariable, Handle, ImageClass, ImageDimension,
+    ResourceBinding, ShaderStage, StorageAccess, StorageFormat, TypeInner,
 };
 use slotmap::{new_key_type, SlotMap};
 use thiserror::Error;
@@ -100,7 +100,10 @@ pub enum PipelineError {
 pub struct ReflectedComputePipeline {
     pub pipeline: wgpu::ComputePipeline,
     pub layout: wgpu::PipelineLayout,
-    pub group_layouts: Vec<(wgpu::BindGroupLayout, Vec<BindGroupLayoutEntry>)>,
+    pub group_layouts: Vec<(
+        wgpu::BindGroupLayout,
+        FastHashMap<u32, BindGroupLayoutEntry>,
+    )>,
 }
 
 // TODO: Investigate a way to explicitly reuse superset pipelinelayouts
@@ -208,7 +211,7 @@ pub fn compute_pipeline_from_module(
             visibility: ShaderStages::COMPUTE,
             ty: binding_ty,
             count: None,
-        })
+        });
     }
 
     let last_active_group = groups
@@ -217,7 +220,10 @@ pub fn compute_pipeline_from_module(
         .rev()
         .find_map(|(idx, group)| (group.len() != 0).then_some(idx));
 
-    let layouts: Vec<(wgpu::BindGroupLayout, Vec<BindGroupLayoutEntry>)> = groups
+    let layouts: Vec<(
+        wgpu::BindGroupLayout,
+        FastHashMap<u32, BindGroupLayoutEntry>,
+    )> = groups
         .into_iter()
         .take(last_active_group.map(|i| i + 1).unwrap_or(0))
         .map(|entries| {
@@ -227,6 +233,11 @@ pub fn compute_pipeline_from_module(
                     label: None,
                     entries: &entries[..],
                 });
+
+            let entries = entries
+                .into_iter()
+                .map(|entry| (entry.binding, entry))
+                .collect();
 
             (group, entries)
         })
