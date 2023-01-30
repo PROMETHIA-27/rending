@@ -25,10 +25,16 @@ fn lightness(rgb: vec4<f32>) -> f32 {
 }
 
 @compute
-@workgroup_size(1, 1)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+@workgroup_size(1)
+fn main(
+    @builtin(global_invocation_id) global_id: vec3<u32>, 
+    @builtin(local_invocation_id) local_id: vec3<u32>
+) {
     let width = u32(textureDimensions(input).x);
+    let coords = vec2(global_id.x, global_id.y * 2u);
+    let l0 = lightness(textureLoad(input, coords, 0));
+    let l1 = lightness(textureLoad(input, coords + vec2(0u, 1u), 0));
+    let l = u32(((l0 + l1) / 2.0) * 255.0);
     let index = global_id.x + (global_id.y * width);
-    let l = u32(lightness(textureLoad(input, global_id.xy, 0)) * 255.0);
     output[index] = ascii_table[l];
 }

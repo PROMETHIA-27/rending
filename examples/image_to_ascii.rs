@@ -99,7 +99,7 @@ fn main() {
 
     let staging = context
         .buffer()
-        .size((RESOLUTION.x * RESOLUTION.y * 16) as u64)
+        .size((RESOLUTION.x * (RESOLUTION.y / 2) * 16) as u64)
         .copy_dst()
         .map_read()
         .create();
@@ -114,7 +114,7 @@ fn main() {
         .step_by(16)
         .copied()
         .collect::<Vec<_>>();
-    for i in (0..256).rev() {
+    for i in (0..128).rev() {
         output.insert(RESOLUTION.x as usize * i, b'\n');
     }
     std::fs::write("assets/text/output.txt", output).unwrap();
@@ -148,6 +148,6 @@ fn copy_to_staging(commands: &mut RenderCommands) {
         0,
         staging,
         0,
-        (RESOLUTION.x * RESOLUTION.y * 16) as u64,
+        (RESOLUTION.x * (RESOLUTION.y / 2) * 16) as u64,
     );
 }
