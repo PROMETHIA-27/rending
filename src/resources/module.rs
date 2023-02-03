@@ -59,6 +59,9 @@ impl std::fmt::Debug for ModuleError {
             ModuleError::SpvParsing(arg0) => f.debug_tuple("ModuleError").field(arg0).finish(),
             ModuleError::Io(arg0) => f.debug_tuple("ModuleError").field(arg0).finish(),
             ModuleError::Utf8(arg0) => f.debug_tuple("ModuleError").field(arg0).finish(),
+            ModuleError::Naga(CreateShaderModuleError::Validation(err)) => {
+                write!(f, "\n{}", err.inner.emit_to_string(&err.source))
+            }
             ModuleError::Naga(err) => std::fmt::Display::fmt(err, f),
         }
     }

@@ -20,17 +20,22 @@ fn lightness(rgb: vec4<f32>) -> f32 {
 }
 
 @compute
-@workgroup_size(1)
+@workgroup_size(1, 1)
 fn main(
     @builtin(global_invocation_id) id: vec3<u32>,
 ) {
-    let width = u32(textureDimensions(input).x);
-    let base_coords = vec2(id.x, id.y * 2u);
+    let dim = vec2<u32>(textureDimensions(input));
+    let width = dim.x;
+    let height = dim.y;
+    let vec_width = arrayLength(&output) / (height / 2u);
 
-    var out_ints = output[id.x];
+    let output_index = id.x + (vec_width * id.y);
+    var out_ints = output[output_index];
+
+    let base_coords = vec2(id.x * 16u, id.y * 2u);
 
     for (var i = 0u; i < 4u; i++) {
-        var out_chars = unpack4x8unorm(out_ints)[i];
+        var out_chars = unpack4x8unorm(out_ints[i]);
 
         for (var j = 0u; j < 4u; j++) {
             let tex_coords = base_coords + vec2((4u * i) + j, 0u);
@@ -51,5 +56,5 @@ fn main(
 
         out_ints[i] = pack4x8unorm(out_chars);
     }
-    output[id.x] = out_ints;
+    output[output_index] = out_ints;
 }

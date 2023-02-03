@@ -20,19 +20,31 @@ fn main() {
     .unwrap();
     let context = instance.create_render_context();
 
-    let img = image::io::Reader::open("assets/images/dog.jpg")
+    let img = image::io::Reader::open("assets/images/eerie.jpg")
         .unwrap()
         .decode()
         .unwrap();
+    // Actual resolution of the image
     let resolution = uvec2(img.width(), img.height());
+    // Resolution split into horizontal UVec4s
+    let vec_resolution = uvec2(
+        div_ceil(resolution.x, size_of::<UVec4>() as u32),
+        resolution.y / 2,
+    );
+    // Actual byte dimensions of resolution after splitting into horizontal UVec4s
+    let output_resolution = uvec2(
+        vec_resolution.x * size_of::<UVec4>() as u32,
+        vec_resolution.y,
+    );
 
     let mut graph = RenderGraph::new();
     graph.add_node(FunctionNode::new(
         "compute_levels",
-        compute_levels(resolution),
+        compute_levels(vec_resolution),
     ));
     graph.add_node(
-        FunctionNode::new("copy_to_staging", copy_to_staging(resolution)).after("compute_levels"),
+        FunctionNode::new("copy_to_staging", copy_to_staging(output_resolution))
+            .after("compute_levels"),
     );
 
     let mut pipelines = PipelineStorage::new();
@@ -56,25 +68,14 @@ fn main() {
         .copy_dst()
         .uniform()
         .create();
-    let ascii_data: [UVec4; 16] = include_str!("../assets/text/levels.txt")
+    let ascii_data: Vec<u8> = include_str!("../assets/text/levels.txt")
         .chars()
         .filter(|&c| c != '\n')
         .map(u32::from)
         .map(u8::try_from)
         .map(Result::unwrap)
-        .collect::<Vec<u8>>()
-        .chunks_exact(16)
-        .map(|chunk| {
-            UVec4::from_slice(
-                &chunk
-                    .chunks_exact(4)
-                    .map(|c| u32::from_ne_bytes(c.try_into().unwrap()))
-                    .collect::<Vec<u32>>(),
-            )
-        })
-        .collect::<Vec<UVec4>>()
-        .try_into()
-        .unwrap_or_else(|_| panic!());
+        .collect();
+    let ascii_data: [UVec4; 256 / (4 * 4)] = bytemuck::cast_slice(&ascii_data).try_into().unwrap();
     let mut ascii_uniform = UniformBuffer::new(vec![]);
     ascii_uniform.write(&ascii_data).unwrap();
     context.write_buffer(&ascii, &ascii_uniform);
@@ -112,13 +113,9 @@ fn main() {
     );
     resources.insert_texture("input", input);
 
-    let output_res = uvec2(
-        div_ceil(resolution.x, size_of::<UVec4>() as u32) * size_of::<UVec4>() as u32,
-        resolution.y / 2,
-    );
     let staging = context
         .buffer()
-        .size((output_res.x * output_res.y) as u64)
+        .size((output_resolution.x * output_resolution.y) as u64)
         .copy_dst()
         .map_read()
         .create();
@@ -133,13 +130,11 @@ fn main() {
     let mut out: Vec<UVec4> = vec![];
     output.read(&mut out).unwrap();
     let mut bytes = vec![];
-    for y in 0..output_res.y {
-        bytes.extend(
-            out[(output_res.x * y) as usize..][..output_res.x as usize]
-                .into_iter()
-                .flat_map(UVec4::to_array)
-                .flat_map(u32::to_ne_bytes)
-                .take(resolution.x as usize),
+    for y in 0..output_resolution.y {
+        bytes.extend_from_slice(
+            &bytemuck::cast_slice(
+                &out[(vec_resolution.x * y) as usize..][..vec_resolution.x as usize],
+            )[..resolution.x as usize],
         );
         bytes.push(b'\n');
     }
@@ -147,7 +142,7 @@ fn main() {
     std::fs::write("assets/text/output.txt", bytes).unwrap();
 }
 
-fn compute_levels(resolution: UVec2) -> impl Fn(&mut RenderCommands) {
+fn compute_levels(vec_resolution: UVec2) -> impl Fn(&mut RenderCommands) {
     move |commands| {
         let ascii = commands.buffer("ascii_table");
         let input = commands.texture("input");
@@ -165,11 +160,11 @@ fn compute_levels(resolution: UVec2) -> impl Fn(&mut RenderCommands) {
                 ],
             )
             .pipeline(pipeline)
-            .dispatch(resolution.x, resolution.y, 1);
+            .dispatch(vec_resolution.x, vec_resolution.y, 1);
     }
 }
 
-fn copy_to_staging(resolution: UVec2) -> impl Fn(&mut RenderCommands) {
+fn copy_to_staging(output_resolution: UVec2) -> impl Fn(&mut RenderCommands) {
     move |commands| {
         let buffer = commands.buffer("output");
         let staging = commands.buffer("staging");
@@ -178,7 +173,7 @@ fn copy_to_staging(resolution: UVec2) -> impl Fn(&mut RenderCommands) {
             0,
             staging,
             0,
-            (resolution.x * (resolution.y / 2)) as u64,
+            (output_resolution.x * output_resolution.y) as u64,
         );
     }
 }
