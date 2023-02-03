@@ -8,12 +8,11 @@ use crate::commands::RenderCommands;
 
 new_key_type! { pub struct NodeKey; }
 
-#[derive(Clone)]
 pub struct RenderNodeMeta {
     pub(crate) name: Cow<'static, str>,
     pub(crate) before: FastHashSet<Cow<'static, str>>,
     pub(crate) after: FastHashSet<Cow<'static, str>>,
-    pub(crate) run_fn: fn(&mut RenderCommands),
+    pub(crate) run_fn: Box<dyn FnMut(&mut RenderCommands)>,
 }
 
 impl std::fmt::Debug for RenderNodeMeta {
@@ -30,16 +29,19 @@ pub struct FunctionNode {
     pub(crate) name: Cow<'static, str>,
     pub(crate) before: FastHashSet<Cow<'static, str>>,
     pub(crate) after: FastHashSet<Cow<'static, str>>,
-    pub(crate) run_fn: fn(&mut RenderCommands),
+    pub(crate) run_fn: Box<dyn FnMut(&mut RenderCommands)>,
 }
 
 impl FunctionNode {
-    pub fn new(name: impl Into<Cow<'static, str>>, run: fn(&mut RenderCommands)) -> Self {
+    pub fn new(
+        name: impl Into<Cow<'static, str>>,
+        run: impl FnMut(&mut RenderCommands) + 'static,
+    ) -> Self {
         FunctionNode {
             name: name.into(),
             before: HashSet::default(),
             after: HashSet::default(),
-            run_fn: run,
+            run_fn: Box::new(run),
         }
     }
 

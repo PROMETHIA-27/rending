@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use encase::private::BufferRef;
+use encase::UniformBuffer;
 use naga::{FastHashSet, ResourceBinding};
 use wgpu::{
     AddressMode, Buffer, BufferDescriptor, BufferSlice, BufferUsages, BufferView, BufferViewMut,
@@ -133,6 +135,10 @@ impl<'d, 'q> RenderContext<'d, 'q> {
         slice.map_async(MapMode::Write, |_| ());
         self.device.poll(MaintainBase::Wait);
         slice.get_mapped_range_mut()
+    }
+
+    pub fn write_buffer<B: AsRef<[u8]>>(&self, target: &Buffer, data: &impl AsRef<B>) {
+        self.queue.write_buffer(target, 0, data.as_ref().as_ref())
     }
 }
 

@@ -55,52 +55,12 @@ pub enum ModuleError {
 
 impl std::fmt::Debug for ModuleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let error = match self {
-            ModuleError::SpvParsing(arg0) => {
-                return f.debug_tuple("ModuleError").field(arg0).finish()
-            }
-            ModuleError::Io(arg0) => return f.debug_tuple("ModuleError").field(arg0).finish(),
-            ModuleError::Utf8(arg0) => return f.debug_tuple("ModuleError").field(arg0).finish(),
-            ModuleError::Naga(err) => err,
-        };
-
-        use codespan_reporting::diagnostic::Diagnostic;
-        use codespan_reporting::files::SimpleFile;
-        use codespan_reporting::term;
-
-        let error = match error {
-            CreateShaderModuleError::Validation(err) => err,
-            err => return f.debug_tuple("ModuleError").field(err).finish(),
-        };
-
-        let files = SimpleFile::new("wgpu", &error.source);
-        let config = term::Config::default();
-        let mut writer = term::termcolor::Ansi::new(vec![]);
-        let diagnostic = Diagnostic::error()
-            .with_message(error.inner.to_string())
-            .with_labels(
-                error
-                    .inner
-                    .spans()
-                    .map(|&(span, ref desc)| {
-                        codespan_reporting::diagnostic::Label::primary((), span.to_range().unwrap())
-                            .with_message(desc.to_owned())
-                    })
-                    .collect(),
-            )
-            .with_notes({
-                let mut notes = Vec::new();
-                let mut source: &dyn Error = error.inner.as_inner();
-                while let Some(next) = Error::source(source) {
-                    notes.push(next.to_string());
-                    source = next;
-                }
-                notes
-            });
-
-        term::emit(&mut writer, &config, &files, &diagnostic).expect("could not write error");
-
-        f.write_str(&String::from_utf8_lossy(&writer.into_inner()))
+        match self {
+            ModuleError::SpvParsing(arg0) => f.debug_tuple("ModuleError").field(arg0).finish(),
+            ModuleError::Io(arg0) => f.debug_tuple("ModuleError").field(arg0).finish(),
+            ModuleError::Utf8(arg0) => f.debug_tuple("ModuleError").field(arg0).finish(),
+            ModuleError::Naga(err) => std::fmt::Display::fmt(err, f),
+        }
     }
 }
 

@@ -149,11 +149,8 @@ impl RenderGraph {
             // virtual_samplers: VirtualSamplers::new(),
         };
 
-        for (index, node) in nodes
-            .iter()
-            .map(|&key| self.nodes.get(key).unwrap())
-            .enumerate()
-        {
+        for (index, &node) in nodes.iter().enumerate() {
+            let node = self.nodes.get_mut(node).unwrap();
             commands.node_index = index;
 
             (node.run_fn)(&mut commands)
