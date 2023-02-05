@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::error::Error;
 use std::path::Path;
 use std::str::Utf8Error;
 

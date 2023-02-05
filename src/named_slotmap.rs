@@ -105,6 +105,11 @@ impl<K: Key, V> NamedSlotMap<K, V> {
     pub fn remap_name(&mut self, name: &str, new_handle: K) {
         *self.names.get_mut(name).unwrap() = new_handle;
     }
+
+    pub fn clear(&mut self) {
+        self.slotmap.clear();
+        self.names.clear();
+    }
 }
 
 pub struct KeyMap<'m, K: Key, V> {

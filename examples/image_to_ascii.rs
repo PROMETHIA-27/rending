@@ -2,28 +2,24 @@ use std::collections::HashSet;
 use std::mem::size_of;
 use std::num::NonZeroU32;
 
-use encase::{impl_vector, ShaderType, StorageBuffer, UniformBuffer};
-use glam::{uvec2, uvec4, UVec2, UVec4, Vec4Swizzles};
+use encase::{StorageBuffer, UniformBuffer};
+use glam::{uvec2, UVec2, UVec4};
 use image::EncodableLayout;
 use rending::*;
 use wgpu::{ImageCopyTexture, TextureAspect, TextureUsages};
 
 fn main() {
-    let instance = GPUInstance::new_headless(
-        Backends::PRIMARY,
-        PowerPreference::HighPerformance,
-        None,
-        Features::default(),
-        Limits::default(),
-        false,
-    )
-    .unwrap();
-    let context = instance.create_render_context();
+    let image_name = std::env::args()
+        .skip(1)
+        .next()
+        .expect("Must provide an image name");
+    let mut path = std::path::PathBuf::new();
+    path.push("assets/images/");
+    path.push(image_name + ".jpg");
 
-    let img = image::io::Reader::open("assets/images/eerie.jpg")
-        .unwrap()
-        .decode()
-        .unwrap();
+    println!("Converting image `{}` to ascii...", path.display());
+    let img = image::io::Reader::open(path).unwrap().decode().unwrap();
+
     // Actual resolution of the image
     let resolution = uvec2(img.width(), img.height());
     // Resolution split into horizontal UVec4s
@@ -36,6 +32,17 @@ fn main() {
         vec_resolution.x * size_of::<UVec4>() as u32,
         vec_resolution.y,
     );
+
+    let instance = GPUInstance::new_headless(
+        Backends::PRIMARY,
+        PowerPreference::HighPerformance,
+        None,
+        Features::default(),
+        Limits::default(),
+        false,
+    )
+    .unwrap();
+    let context = instance.create_render_context();
 
     let mut graph = RenderGraph::new();
     graph.add_node(FunctionNode::new(
@@ -58,7 +65,7 @@ fn main() {
         .unwrap();
     pipelines.insert_compute_pipeline("compute_levels_pipeline", compute_levels);
 
-    let mut compiled = graph.compile(&pipelines).unwrap();
+    let mut compiled = graph.compile(&pipelines, None).unwrap();
 
     let mut resources = RenderResources::new();
 
@@ -140,6 +147,8 @@ fn main() {
     }
 
     std::fs::write("assets/text/output.txt", bytes).unwrap();
+
+    println!("Image conversion success!");
 }
 
 fn compute_levels(vec_resolution: UVec2) -> impl Fn(&mut RenderCommands) {

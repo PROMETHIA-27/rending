@@ -1,8 +1,6 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use fixed::FixedU32;
-use naga::FastHashMap;
 use slotmap::SecondaryMap;
 use wgpu::Buffer;
 
@@ -157,4 +155,11 @@ pub(crate) struct ResourceConstraints {
     pub buffers: SecondaryMap<BufferHandle, BufferConstraints>,
     pub textures: SecondaryMap<TextureHandle, TextureConstraints>,
     // pub samplers: SecondaryMap<SamplerHandle, SamplerConstraints>,
+}
+
+impl ResourceConstraints {
+    pub fn clear(&mut self) {
+        self.buffers.clear();
+        self.textures.clear();
+    }
 }

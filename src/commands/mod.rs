@@ -1,7 +1,5 @@
 use std::borrow::{Borrow, Cow};
-use std::collections::BTreeMap;
 
-use naga::FastHashMap;
 use wgpu::{BufferUsages, Extent3d, ImageDataLayout, TextureFormat};
 
 use crate::named_slotmap::NamedSlotMap;
@@ -12,10 +10,11 @@ use crate::resources::{
     TextureAspect, TextureCopyView, TextureHandle, TextureSize,
 };
 
-pub(crate) use self::pass::{ComputePassCommand, ComputePassCommands};
+pub(crate) use self::compute_pass::{ComputePassCommand, ComputePassCommands};
 
-mod pass;
+mod compute_pass;
 
+// TODO: Pool vecs in commands
 #[derive(Debug)]
 pub(crate) enum RenderCommand {
     WriteBuffer(BufferHandle, u64, Vec<u8>),

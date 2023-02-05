@@ -14,13 +14,14 @@ use super::pipeline::PipelineStorage;
 use super::{
     BindGroupLayoutHandle, BufferBindings,
     BufferHandle, /* Sampler, SamplerBindings, SamplerHandle,*/
-    TextureAspect, TextureBindings, TextureHandle, TextureSampleType, TextureViewDimension,
+    TextureAspect, TextureBindings, TextureHandle, TextureViewDimension,
 };
 
 pub(crate) type BindGroups = SecondaryMap<BindGroupHandle, BindGroup>;
 
 new_key_type! { pub(crate) struct BindGroupHandle; }
 
+// TODO: pool vecs here
 #[derive(Debug)]
 pub(crate) struct BindGroupCache {
     groups: SlotMap<BindGroupHandle, (BindGroupLayoutHandle, Vec<(u32, ResourceBinding)>)>,
@@ -33,6 +34,11 @@ impl BindGroupCache {
             groups: SlotMap::with_key(),
             reverse: BTreeMap::new(),
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.groups.clear();
+        self.reverse.clear();
     }
 
     pub fn get_handle(

@@ -1,12 +1,9 @@
 use std::path::Path;
 
-use encase::private::BufferRef;
-use encase::UniformBuffer;
 use naga::{FastHashSet, ResourceBinding};
 use wgpu::{
-    AddressMode, Buffer, BufferDescriptor, BufferSlice, BufferUsages, BufferView, BufferViewMut,
-    Device, FilterMode, Label, MaintainBase, MapMode, Queue, SamplerDescriptor, TextureDescriptor,
-    TextureFormat, TextureUsages,
+    Buffer, BufferDescriptor, BufferSlice, BufferUsages, BufferView, BufferViewMut, Device, Label,
+    MaintainBase, MapMode, Queue, TextureDescriptor, TextureFormat, TextureUsages,
 };
 
 // use crate::resources::Sampler;

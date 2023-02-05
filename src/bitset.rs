@@ -2,6 +2,7 @@ use std::fmt::Debug;
 
 use smallvec::SmallVec;
 
+// TODO: Do performance comparisons of this with various lengths of smallvec and `FixedBitset`
 #[derive(Clone)]
 pub struct Bitset {
     words: SmallVec<[u64; 1]>,

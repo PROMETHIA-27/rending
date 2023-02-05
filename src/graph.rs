@@ -1,10 +1,7 @@
 use naga::FastHashSet;
 use slotmap::SecondaryMap;
 use thiserror::Error;
-use wgpu::{
-    AddressMode, BufferDescriptor, CommandEncoderDescriptor, ComputePassDescriptor, FilterMode,
-    ImageCopyTexture, SamplerDescriptor,
-};
+use wgpu::{BufferDescriptor, CommandEncoderDescriptor, ComputePassDescriptor, ImageCopyTexture};
 
 use crate::bitset::Bitset;
 use crate::commands::{
@@ -60,6 +57,7 @@ impl RenderGraph {
     pub fn compile<'g>(
         &'g mut self,
         pipelines: &'g PipelineStorage,
+        artifacts: Option<RenderCompilationArtifacts>,
     ) -> Result<RenderGraphCompilation, RenderGraphError> {
         // Map of { dependent: dependencies }
         // TODO: Pool this
@@ -130,9 +128,29 @@ impl RenderGraph {
 
         // Run nodes to determine resource usage/build command queue
         // TODO: Pool these bits
-        let mut queue = vec![];
-        let mut bind_cache = BindGroupCache::new();
-        let mut constraints = ResourceConstraints::default();
+        let mut queue;
+        let mut bind_cache;
+        let mut constraints;
+        let mut virtual_buffers;
+        let mut virtual_textures;
+        if let Some(artifacts) = artifacts {
+            queue = artifacts.queue;
+            queue.clear();
+            bind_cache = artifacts.bind_cache;
+            bind_cache.clear();
+            constraints = artifacts.constraints;
+            constraints.clear();
+            virtual_buffers = artifacts.virtual_buffers;
+            virtual_buffers.clear();
+            virtual_textures = artifacts.virtual_textures;
+            virtual_textures.clear();
+        } else {
+            queue = vec![];
+            bind_cache = BindGroupCache::new();
+            constraints = ResourceConstraints::default();
+            virtual_buffers = VirtualBuffers::new();
+            virtual_textures = VirtualTextures::new();
+        }
 
         let mut commands = RenderCommands {
             pipelines: &pipelines,
@@ -144,9 +162,8 @@ impl RenderGraph {
             resource_accesses: ResourceAccesses::from_iter(
                 std::iter::repeat(NodeResourceAccess::new()).take(self.nodes.len()),
             ),
-            virtual_buffers: VirtualBuffers::new(),
-            virtual_textures: VirtualTextures::new(),
-            // virtual_samplers: VirtualSamplers::new(),
+            virtual_buffers: virtual_buffers,
+            virtual_textures: virtual_textures,
         };
 
         for (index, &node) in nodes.iter().enumerate() {
@@ -243,6 +260,7 @@ impl RenderGraph {
     }
 }
 
+// TODO: Reuse artifacts
 #[derive(Debug)]
 pub struct RenderGraphCompilation<'p> {
     pipelines: &'p PipelineStorage,
@@ -403,6 +421,46 @@ impl RenderGraphCompilation<'_> {
         ctx.queue.submit([commandbuffer]);
 
         Ok(())
+    }
+
+    pub fn into_artifacts(self) -> RenderCompilationArtifacts {
+        RenderCompilationArtifacts {
+            queue: self.queue,
+            bind_cache: self.bind_cache,
+            constraints: self.constraints,
+            virtual_buffers: self.virtual_buffers,
+            virtual_textures: self.virtual_textures,
+        }
+    }
+
+    pub fn from_artifacts(
+        artifacts: RenderCompilationArtifacts,
+        pipelines: &PipelineStorage,
+    ) -> RenderGraphCompilation {
+        artifacts.into_compilation(pipelines)
+    }
+}
+
+#[derive(Debug)]
+pub struct RenderCompilationArtifacts {
+    queue: Vec<RenderCommand>,
+    bind_cache: BindGroupCache,
+    constraints: ResourceConstraints,
+    virtual_buffers: VirtualBuffers,
+    virtual_textures: VirtualTextures,
+    // virtual_samplers: VirtualSamplers,
+}
+
+impl RenderCompilationArtifacts {
+    pub fn into_compilation(self, pipelines: &PipelineStorage) -> RenderGraphCompilation {
+        RenderGraphCompilation {
+            pipelines,
+            queue: self.queue,
+            bind_cache: self.bind_cache,
+            constraints: self.constraints,
+            virtual_buffers: self.virtual_buffers,
+            virtual_textures: self.virtual_textures,
+        }
     }
 }
 
