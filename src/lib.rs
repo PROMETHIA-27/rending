@@ -7,6 +7,7 @@ mod node;
 mod resources;
 mod spirv_iter;
 mod util;
+mod vecpool;
 
 pub use commands::RenderCommands;
 pub use context::{BufferBuilder, RenderContext};
@@ -144,6 +145,8 @@ impl GPUInstance {
         Some(Self { device, queue })
     }
 
+    /// Create a `RenderContext`. This is the connection to the GPU that
+    /// rending actually uses.
     pub fn create_render_context(&self) -> RenderContext {
         RenderContext::new(&self.device, &self.queue)
     }
