@@ -21,7 +21,7 @@ pub(crate) type BindGroups = SecondaryMap<BindGroupHandle, BindGroup>;
 
 new_key_type! { pub(crate) struct BindGroupHandle; }
 
-// TODO: pool vecs here
+// TODO: pool vecs in here
 #[derive(Debug)]
 pub(crate) struct BindGroupCache {
     groups: SlotMap<BindGroupHandle, (BindGroupLayoutHandle, Vec<(u32, ResourceBinding)>)>,
