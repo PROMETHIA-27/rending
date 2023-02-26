@@ -35,7 +35,7 @@ fn main(
     let base_coords = vec2(id.x * 16u, id.y * 2u);
 
     for (var i = 0u; i < 4u; i++) {
-        var out_chars = unpack4x8unorm(out_ints[i]);
+        var out_chars = vec4<f32>(0.0, 0.0, 0.0, 0.0);
 
         for (var j = 0u; j < 4u; j++) {
             let tex_coords = base_coords + vec2((4u * i) + j, 0u);
