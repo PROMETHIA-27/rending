@@ -102,6 +102,12 @@ impl RenderResources {
     // }
 }
 
+impl Default for RenderResources {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ResourceHandle {
     Buffer(BufferHandle),

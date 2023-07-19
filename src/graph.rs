@@ -153,7 +153,7 @@ impl RenderGraph {
         }
 
         let mut commands = RenderCommands {
-            pipelines: &pipelines,
+            pipelines,
             queue: &mut queue,
             bind_cache: &mut bind_cache,
             constraints: &mut constraints,
@@ -162,8 +162,8 @@ impl RenderGraph {
             resource_accesses: ResourceAccesses::from_iter(
                 std::iter::repeat(NodeResourceAccess::new()).take(self.nodes.len()),
             ),
-            virtual_buffers: virtual_buffers,
-            virtual_textures: virtual_textures,
+            virtual_buffers,
+            virtual_textures,
         };
 
         for (index, &node) in nodes.iter().enumerate() {
@@ -178,7 +178,6 @@ impl RenderGraph {
         // Traverse the graph and build up bitsets of all dependencies
         let mut stack = vec![];
         let all_dependencies: Vec<Bitset> = (0..nodes.len())
-            .into_iter()
             .map(|index| {
                 let mut bitset = Bitset::new(nodes.len());
                 stack.push(index);
@@ -198,18 +197,18 @@ impl RenderGraph {
         let mut ambiguities = vec![];
         for index_a in 0..nodes.len() {
             for index_b in all_dependencies[index_a].inverted().iter() {
-                if !all_dependencies[index_b].contains(index_a).unwrap() {
-                    if do_nodes_conflict(&commands, index_a, index_b) {
-                        ambiguities.push((
-                            self.nodes.get_name(nodes[index_a]).unwrap().to_string(),
-                            self.nodes.get_name(nodes[index_b]).unwrap().to_string(),
-                        ))
-                    }
+                if !all_dependencies[index_b].contains(index_a).unwrap()
+                    && do_nodes_conflict(&commands, index_a, index_b)
+                {
+                    ambiguities.push((
+                        self.nodes.get_name(nodes[index_a]).unwrap().to_string(),
+                        self.nodes.get_name(nodes[index_b]).unwrap().to_string(),
+                    ))
                 }
             }
         }
 
-        if ambiguities.len() > 0 {
+        if !ambiguities.is_empty() {
             return Err(RenderGraphError::WriteOrderAmbiguity(ambiguities));
         }
 
@@ -257,6 +256,12 @@ impl RenderGraph {
             virtual_textures,
             // virtual_samplers,
         })
+    }
+}
+
+impl Default for RenderGraph {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -362,7 +367,7 @@ impl RenderGraphCompilation<'_> {
         // Make bind groups
         let bind_groups = self.bind_cache.create_groups(
             ctx,
-            &self.pipelines,
+            self.pipelines,
             &bound_buffers,
             &bound_textures,
             // &bound_samplers,
@@ -376,7 +381,7 @@ impl RenderGraphCompilation<'_> {
             match command {
                 RenderCommand::WriteBuffer(handle, offset, data) => {
                     let buffer = bound_buffers.get(*handle).unwrap().as_ref();
-                    ctx.queue.write_buffer(&buffer, *offset, &data[..]);
+                    ctx.queue.write_buffer(buffer, *offset, &data[..]);
                 }
                 RenderCommand::WriteTexture(view, data, layout, size) => {
                     let texture = bound_textures.get(view.handle).unwrap().as_ref();
@@ -413,7 +418,7 @@ impl RenderGraphCompilation<'_> {
                 &RenderCommand::CopyBufferToBuffer(src, src_off, dst, dst_off, size) => {
                     let src = bound_buffers.get(src).unwrap().as_ref();
                     let dst = bound_buffers.get(dst).unwrap().as_ref();
-                    encoder.copy_buffer_to_buffer(&src, src_off, &dst, dst_off, size);
+                    encoder.copy_buffer_to_buffer(src, src_off, dst, dst_off, size);
                 }
             }
         }
@@ -467,12 +472,7 @@ impl RenderCompilationArtifacts {
 fn do_nodes_conflict(cmd: &RenderCommands, left: usize, right: usize) -> bool {
     let (left, right) = (&cmd.resource_accesses[left], &cmd.resource_accesses[right]);
 
-    if left.reads.intersects_with(&right.writes)
+    left.reads.intersects_with(&right.writes)
         || right.reads.intersects_with(&left.writes)
         || left.writes.intersects_with(&right.writes)
-    {
-        true
-    } else {
-        false
-    }
 }

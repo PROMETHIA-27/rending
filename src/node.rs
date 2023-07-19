@@ -56,13 +56,13 @@ impl FunctionNode {
     }
 }
 
-impl Into<RenderNodeMeta> for FunctionNode {
-    fn into(self) -> RenderNodeMeta {
+impl From<FunctionNode> for RenderNodeMeta {
+    fn from(val: FunctionNode) -> Self {
         RenderNodeMeta {
-            name: self.name,
-            before: self.before,
-            after: self.after,
-            run_fn: self.run_fn,
+            name: val.name,
+            before: val.before,
+            after: val.after,
+            run_fn: val.run_fn,
         }
     }
 }

@@ -8,11 +8,9 @@ use image::EncodableLayout;
 use rending::*;
 use wgpu::{ImageCopyTexture, TextureAspect, TextureUsages};
 
+#[allow(clippy::read_zero_byte_vec)]
 fn main() {
-    let image_name = std::env::args()
-        .skip(1)
-        .next()
-        .expect("Must provide an image name");
+    let image_name = std::env::args().nth(1).expect("Must provide an image name");
     let mut path = std::path::PathBuf::new();
     path.push("assets/images/");
     path.push(image_name + ".jpg");

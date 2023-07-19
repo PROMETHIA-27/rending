@@ -82,6 +82,12 @@ impl PipelineStorage {
     }
 }
 
+impl Default for PipelineStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum PipelineError {
     #[error("entry point `{0}` is missing from module")]
@@ -218,7 +224,7 @@ pub fn compute_pipeline_from_module(
         .iter()
         .enumerate()
         .rev()
-        .find_map(|(idx, group)| (group.len() != 0).then_some(idx));
+        .find_map(|(idx, group)| (!group.is_empty()).then_some(idx));
 
     let layouts: Vec<(
         wgpu::BindGroupLayout,

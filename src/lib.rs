@@ -7,7 +7,6 @@ mod node;
 mod resources;
 mod spirv_iter;
 mod util;
-mod vecpool;
 
 pub use commands::RenderCommands;
 pub use context::{BufferBuilder, RenderContext};

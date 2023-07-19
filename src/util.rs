@@ -31,6 +31,7 @@ impl<I: Iterator<Item = u8>> Iterator for U8ToU32Iterator<I> {
 }
 
 // Will be removed when try_from_fn goes in
+#[allow(clippy::needless_range_loop)]
 fn array_from_iter<T, I: Iterator<Item = T>, const N: usize>(iter: &mut I) -> Option<[T; N]> {
     // SAFETY:
     // - This is very scary, but supported by the docs!

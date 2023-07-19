@@ -81,7 +81,7 @@ impl ComputePassCommands<'_, '_, '_> {
             let group_layout = commands
                 .pipelines
                 .bind_group_layouts
-                .get(layout.groups[group_index as usize])
+                .get(layout.groups[group_index])
                 .unwrap();
 
             for &mut (binding, ref mut resource) in binding.iter_mut() {
