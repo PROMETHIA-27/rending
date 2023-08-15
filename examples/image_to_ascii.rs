@@ -43,11 +43,11 @@ fn main() {
     let context = instance.create_render_context();
 
     let mut graph = RenderGraph::new();
-    graph.add_node(FunctionNode::new(
+    graph.add(FunctionNode::new(
         "compute_levels",
         compute_levels(vec_resolution),
     ));
-    graph.add_node(
+    graph.add(
         FunctionNode::new("copy_to_staging", copy_to_staging(output_resolution))
             .after("compute_levels"),
     );

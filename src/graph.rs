@@ -49,7 +49,7 @@ impl RenderGraph {
         }
     }
 
-    pub fn add_node(&mut self, node: impl Into<RenderNodeMeta>) {
+    pub fn add(&mut self, node: impl Into<RenderNodeMeta>) {
         let meta = node.into();
         self.nodes.insert(meta.name.clone(), meta);
     }

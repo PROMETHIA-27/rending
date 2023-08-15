@@ -19,6 +19,7 @@ pub struct ShaderModule {
 }
 
 // TODO: Wrap this in a struct so that variants aren't visible
+// TODO: Add naga module input
 #[non_exhaustive]
 pub enum ShaderSource<I: SpirvIterator, P: AsRef<Path>> {
     Spirv(I),
