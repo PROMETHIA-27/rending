@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::NonZeroU64;
 
 use slotmap::{new_key_type, SecondaryMap, SlotMap};
 use wgpu::{
@@ -10,7 +10,7 @@ use wgpu::{
 use crate::RenderContext;
 
 use super::buffer::BufferUse;
-use super::pipeline::PipelineStorage;
+use super::pipeline::Pipelines;
 use super::{
     BindGroupLayoutHandle, BufferBindings,
     BufferHandle, /* Sampler, SamplerBindings, SamplerHandle,*/
@@ -67,7 +67,7 @@ impl BindGroupCache {
     pub fn create_groups(
         &self,
         context: RenderContext,
-        pipelines: &PipelineStorage,
+        pipelines: &Pipelines,
         bound_buffers: &BufferBindings,
         bound_textures: &TextureBindings,
         // bound_samplers: &SamplerBindings,
@@ -166,9 +166,9 @@ pub enum ResourceBinding {
         dimension: Option<TextureViewDimension>,
         aspect: TextureAspect,
         base_mip: u32,
-        mip_count: Option<NonZeroU32>,
+        mip_count: Option<u32>,
         base_layer: u32,
-        layer_count: Option<NonZeroU32>,
+        layer_count: Option<u32>,
     },
     // Sampler {
     //     handle: SamplerHandle,

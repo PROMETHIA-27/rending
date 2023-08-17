@@ -1,30 +1,24 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use slotmap::SecondaryMap;
 use wgpu::Buffer;
 
-use crate::bitset::Bitset;
-
 pub(crate) use self::bindgroup::{BindGroupCache, BindGroupHandle, ResourceBinding};
-pub(crate) use self::buffer::{BufferBinding, BufferBindings, BufferConstraints, BufferUse};
+pub(crate) use self::buffer::{BufferBinding, BufferBindings, BufferUse};
 pub use self::buffer::{BufferError, BufferHandle, BufferSlice};
 pub use self::layout::{
     BindGroupLayout, BindGroupLayoutHandle, PipelineLayout, PipelineLayoutHandle,
 };
 pub use self::module::{module_from_source, ModuleError, ShaderModule, ShaderSource};
 pub use self::pipeline::{
-    compute_pipeline_from_module, ComputePipeline, ComputePipelineHandle, PipelineError,
-    PipelineStorage, ReflectedComputePipeline,
+    compute_pipeline_from_module, ComputePipeline, ComputePipelineHandle, PipelineError, Pipelines,
+    ReflectedComputePipeline,
 };
 // use self::sampler::SamplerTypeConstraint;
 // pub use self::sampler::{Sampler, SamplerError, SamplerHandle};
 // pub(crate) use self::sampler::{SamplerBinding, SamplerBindings, SamplerConstraints};
 pub use self::texture::{Texture, TextureAspect, TextureCopyView, TextureError, TextureSize};
-pub(crate) use self::texture::{
-    TextureBinding, TextureBindings, TextureConstraints, TextureHandle, TextureSampleType,
-    TextureViewDimension,
-};
+pub(crate) use self::texture::{TextureBindings, TextureHandle, TextureViewDimension};
 
 mod bindgroup;
 mod buffer;
@@ -138,34 +132,5 @@ bitflags::bitflags! {
         const READ = 0b01;
         const WRITE = 0b10;
         const READWRITE = Self::READ.bits | Self::WRITE.bits;
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct NodeResourceAccess {
-    pub reads: Bitset,
-    pub writes: Bitset,
-}
-
-impl NodeResourceAccess {
-    pub fn new() -> Self {
-        Self {
-            reads: Bitset::new(0),
-            writes: Bitset::new(0),
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct ResourceConstraints {
-    pub buffers: SecondaryMap<BufferHandle, BufferConstraints>,
-    pub textures: SecondaryMap<TextureHandle, TextureConstraints>,
-    // pub samplers: SecondaryMap<SamplerHandle, SamplerConstraints>,
-}
-
-impl ResourceConstraints {
-    pub fn clear(&mut self) {
-        self.buffers.clear();
-        self.textures.clear();
     }
 }

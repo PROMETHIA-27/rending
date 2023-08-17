@@ -22,11 +22,11 @@ impl<'d, 'q> RenderContext<'d, 'q> {
         Self { device, queue }
     }
 
-    pub fn buffer<'a>(self) -> BufferBuilder<'d, 'q, 'a> {
+    pub fn buffer<'a>(self, size: u64) -> BufferBuilder<'d, 'q, 'a> {
         BufferBuilder {
             ctx: self,
             label: None,
-            size: None,
+            size,
             usages: BufferUsages::empty(),
             mapped: false,
         }
@@ -142,7 +142,7 @@ impl<'d, 'q> RenderContext<'d, 'q> {
 pub struct BufferBuilder<'d, 'q, 'a> {
     ctx: RenderContext<'d, 'q>,
     label: Label<'a>,
-    size: Option<u64>,
+    size: u64,
     usages: BufferUsages,
     mapped: bool,
 }
@@ -150,11 +150,6 @@ pub struct BufferBuilder<'d, 'q, 'a> {
 impl<'a> BufferBuilder<'_, '_, 'a> {
     pub fn label(mut self, l: Label<'a>) -> Self {
         self.label = l;
-        self
-    }
-
-    pub fn size(mut self, size: u64) -> Self {
-        self.size = Some(size);
         self
     }
 
@@ -193,12 +188,10 @@ impl<'a> BufferBuilder<'_, '_, 'a> {
         self
     }
 
-    pub fn create(self) -> Buffer {
+    pub fn finish(self) -> Buffer {
         self.ctx.device.create_buffer(&BufferDescriptor {
             label: self.label,
-            size: self
-                .size
-                .expect("must specify a size when creating a buffer using `BufferBuilder::size()`"),
+            size: self.size,
             usage: self.usages,
             mapped_at_creation: self.mapped,
         })

@@ -1,11 +1,8 @@
-use std::num::NonZeroU32;
-
 use smallvec::SmallVec;
-use wgpu::Extent3d;
 
 use crate::resources::{
-    BindGroupHandle, BufferUse, ComputePipelineHandle, RWMode, ResourceBinding, TextureAspect,
-    TextureSampleType, TextureViewDimension,
+    BindGroupHandle, BufferUse, ComputePipelineHandle, RWMode, ResourceBinding,
+    TextureViewDimension,
 };
 
 use super::{RenderCommand, RenderCommands};
@@ -19,15 +16,15 @@ pub(crate) enum ComputePassCommand {
 
 type TempBindings = SmallVec<[(u32, ResourceBinding); 16]>;
 
-pub struct ComputePassCommands<'c, 'q, 'r> {
-    pub(crate) commands: &'c mut RenderCommands<'q, 'r>,
+pub struct ComputePassCommands<'c, 'r> {
+    pub(crate) commands: &'c mut RenderCommands<'r>,
     pub(crate) command_index: usize,
     pub(crate) pipeline: Option<ComputePipelineHandle>,
     // TODO: This is a **heavy** array being passed by value
     pub(crate) bindings: [Option<TempBindings>; wgpu_core::MAX_BIND_GROUPS],
 }
 
-impl ComputePassCommands<'_, '_, '_> {
+impl ComputePassCommands<'_, '_> {
     fn enqueue(&mut self, c: ComputePassCommand) {
         match &mut self.commands.queue[self.command_index] {
             RenderCommand::ComputePass(_, queue) => queue.push(c),
@@ -50,7 +47,7 @@ impl ComputePassCommands<'_, '_, '_> {
         self
     }
 
-    pub fn dispatch(self, x: u32, y: u32, z: u32) -> Self {
+    pub fn dispatch(mut self, x: u32, y: u32, z: u32) -> Self {
         // Have to temporarily destruct to get around aliasing borrows
         let Self {
             commands,
@@ -89,43 +86,23 @@ impl ComputePassCommands<'_, '_, '_> {
 
                 match (resource, entry.ty) {
                     (
-                        &mut ResourceBinding::Buffer {
-                            handle,
-                            offset,
-                            size,
-                            usage,
-                        },
+                        &mut ResourceBinding::Buffer { size, usage, .. },
                         wgpu::BindingType::Buffer {
                             ty,
                             min_binding_size,
                             ..
                         },
                     ) => {
-                        let constraints = commands
-                            .constraints
-                            .buffers
-                            .entry(handle)
-                            .unwrap()
-                            .or_default();
                         let binding_size = size.map(u64::from);
                         let min_binding_size = min_binding_size.map(u64::from);
-                        let min_size = match (binding_size, min_binding_size) {
-                            (Some(binding), Some(min)) => {
-                                assert!(
-                                    binding >= min,
-                                    "attempted to bind {binding} buffer bytes 
+                        if let (Some(binding), Some(min)) = (binding_size, min_binding_size) {
+                            assert!(
+                                binding >= min,
+                                "attempted to bind {binding} buffer bytes 
                                     when the minimum binding size was {min} at 
                                     binding slot {{ {group_index}, {binding} }}"
-                                );
-                                binding + offset
-                            }
-                            (Some(binding), None) => binding + offset,
-                            (None, Some(min)) => min + offset,
-                            (None, None) => 0, // TODO: Might be a better way to handle this case,
-                                               // since right now it'll probably break if no other usage makes the buffer large enough.
-                                               // That should be really silly and rare though
+                            );
                         };
-                        constraints.set_size(min_size);
 
                         match ty {
                             wgpu::BufferBindingType::Uniform => {
@@ -133,8 +110,6 @@ impl ComputePassCommands<'_, '_, '_> {
                                     usage.matches_use(BufferUse::Uniform),
                                     "buffer bound to uniform slot must be passed as a uniform; try using `.uniform()` on a `BufferSlice`"
                                 );
-                                constraints.set_uniform();
-                                commands.mark_resource_read(handle.into());
                             }
                             wgpu::BufferBindingType::Storage { read_only } => {
                                 assert!(
@@ -144,118 +119,24 @@ impl ComputePassCommands<'_, '_, '_> {
                                     })),
                                     "buffer bound to storage slot must be passed as a storage with the same ReadWrite access mode; try using `.storage()` on a `BufferSlice`, and ensure both have the same access mode"
                                 );
-                                constraints.set_storage();
-                                commands.mark_resource_read(handle.into());
-                                if !read_only {
-                                    commands.mark_resource_write(handle.into())
-                                }
                             }
                         }
                     }
                     (
                         &mut ResourceBinding::Texture {
-                            handle,
-                            ref mut dimension,
-                            base_mip,
-                            mip_count,
-                            base_layer,
-                            layer_count,
-                            aspect,
+                            ref mut dimension, ..
                         },
-                        wgpu::BindingType::Texture {
-                            sample_type,
-                            view_dimension,
-                            multisampled,
-                        },
+                        wgpu::BindingType::Texture { view_dimension, .. },
                     ) => {
-                        let constraints = commands
-                            .constraints
-                            .textures
-                            .entry(handle)
-                            .unwrap()
-                            .or_default();
-                        let min_mips = match mip_count {
-                            Some(count) => base_mip + count.get(),
-                            None => base_mip,
-                        };
-                        constraints.set_mip_count(min_mips);
-                        constraints.set_min_size(Extent3d {
-                            width: 0,
-                            height: 0,
-                            depth_or_array_layers: base_layer
-                                + layer_count.map(NonZeroU32::get).unwrap_or(0),
-                        });
-                        match aspect {
-                            TextureAspect::StencilOnly => constraints.has_stencil = true,
-                            TextureAspect::DepthOnly => constraints.has_depth = true,
-                            _ => (),
-                        }
-                        constraints.set_sample_type(TextureSampleType::from_wgpu(sample_type));
-
                         *dimension = Some(TextureViewDimension::from_wgpu(view_dimension));
-
-                        if multisampled {
-                            constraints.set_multisampled();
-                        }
-
-                        constraints.set_texture_binding();
-                        commands.mark_resource_read(handle.into());
                     }
                     (
                         &mut ResourceBinding::Texture {
-                            handle,
-                            ref mut dimension,
-                            base_mip,
-                            mip_count,
-                            base_layer,
-                            layer_count,
-                            aspect,
+                            ref mut dimension, ..
                         },
-                        wgpu::BindingType::StorageTexture {
-                            access,
-                            format,
-                            view_dimension,
-                        },
+                        wgpu::BindingType::StorageTexture { view_dimension, .. },
                     ) => {
-                        let constraints = commands
-                            .constraints
-                            .textures
-                            .entry(handle)
-                            .unwrap()
-                            .or_default();
-                        let min_mips = match mip_count {
-                            Some(count) => base_mip + count.get(),
-                            None => base_mip,
-                        };
-                        constraints.set_mip_count(min_mips);
-                        constraints.set_min_size(Extent3d {
-                            width: 0,
-                            height: 0,
-                            depth_or_array_layers: base_layer
-                                + layer_count.map(NonZeroU32::get).unwrap_or(0),
-                        });
-                        match aspect {
-                            TextureAspect::StencilOnly => constraints.has_stencil = true,
-                            TextureAspect::DepthOnly => constraints.has_depth = true,
-                            _ => (),
-                        }
-
                         *dimension = Some(TextureViewDimension::from_wgpu(view_dimension));
-
-                        constraints.set_format(format);
-                        constraints.set_storage_binding();
-                        match access {
-                            wgpu::StorageTextureAccess::WriteOnly => {
-                                commands.mark_resource_write(handle.into())
-                            }
-                            wgpu::StorageTextureAccess::ReadOnly => {
-                                commands.mark_resource_read(handle.into())
-                            }
-                            wgpu::StorageTextureAccess::ReadWrite => {
-                                commands.mark_resource_read(handle.into());
-                                commands.mark_resource_write(handle.into());
-                            }
-                        }
                     }
                     // (
                     //     &mut ResourceBinding::Sampler { handle },
@@ -282,15 +163,14 @@ impl ComputePassCommands<'_, '_, '_> {
             }
         }
 
-        // this == self but `self` can't be used here
-        let mut this = Self {
+        self = Self {
             commands,
             command_index,
             pipeline,
             bindings,
         };
 
-        this.enqueue(ComputePassCommand::Dispatch(x, y, z));
-        this
+        self.enqueue(ComputePassCommand::Dispatch(x, y, z));
+        self
     }
 }

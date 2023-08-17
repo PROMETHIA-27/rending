@@ -1,11 +1,8 @@
-use std::num::NonZeroU32;
 use std::ops::{Bound, RangeBounds};
 
 use slotmap::{new_key_type, SecondaryMap};
 use thiserror::Error;
-use wgpu::{
-    Extent3d, Origin3d, TextureDimension, TextureFormat, TextureFormatFeatureFlags, TextureUsages,
-};
+use wgpu::{Extent3d, Origin3d, TextureDimension, TextureFormat, TextureUsages};
 
 use super::ResourceBinding;
 
@@ -49,9 +46,9 @@ pub struct TextureView {
     handle: TextureHandle,
     aspect: TextureAspect,
     base_mip: u32,
-    mip_count: Option<NonZeroU32>,
+    mip_count: Option<u32>,
     base_layer: u32,
-    layer_count: Option<NonZeroU32>,
+    layer_count: Option<u32>,
 }
 
 impl TextureView {
@@ -95,8 +92,7 @@ impl TextureView {
             Bound::Included(&end) => Some(end - base + 1),
             Bound::Excluded(&end) => Some(end - base),
             Bound::Unbounded => None,
-        }
-        .map(|c| NonZeroU32::new(c).expect("mips slice must be at least 1 element long"));
+        };
         self.base_mip = base;
         self.mip_count = count;
         self
@@ -112,8 +108,7 @@ impl TextureView {
             Bound::Included(&end) => Some(end - base + 1),
             Bound::Excluded(&end) => Some(end - base),
             Bound::Unbounded => None,
-        }
-        .map(|c| NonZeroU32::new(c).expect("layer slice must be at least 1 element long"));
+        };
         self.base_layer = base;
         self.layer_count = count;
         self
@@ -353,281 +348,4 @@ pub enum TextureError {
     InsufficientMipLevels(String, u32, u32),
     #[error("retained texture `{0}` is used with {1} samples but was created with {2}")]
     InsufficientSamples(String, u32, u32),
-}
-
-#[derive(Debug)]
-pub(crate) enum TextureSampleTypeConstraint {
-    Unconstrained,
-    Conflicted(TextureSampleType, TextureSampleType),
-    Constrained(TextureSampleType),
-}
-
-#[derive(Debug)]
-pub(crate) struct TextureConstraints {
-    pub size: Option<TextureSize>,
-    pub min_size: Extent3d,
-    pub format: Option<TextureFormat>,
-    pub has_depth: bool,
-    pub has_stencil: bool,
-    pub min_mip_level_count: u32,
-    pub min_sample_count: u32,
-    pub min_usages: TextureUsages,
-    pub multisampled: bool,
-    pub sample_type: TextureSampleTypeConstraint,
-}
-
-impl TextureConstraints {
-    pub fn verify(&self, name: &str) -> Option<TextureError> {
-        if let Some(size) = self.size {
-            let (x, y, z) = match size {
-                TextureSize::D1 { x } => (x, 1, 1),
-                TextureSize::D2 { x, y } => (x, y, 1),
-                TextureSize::D3 { x, y, z } => (x, y, z),
-                TextureSize::D2Array { x, y, layers } => (x, y, layers),
-            };
-            if x < self.min_size.width
-                || y < self.min_size.height
-                || z < self.min_size.depth_or_array_layers
-            {
-                return Some(TextureError::SizeLessThanMinSize(
-                    name.into(),
-                    self.min_size,
-                    size,
-                ));
-            }
-        }
-
-        if let Some(format) = self.format {
-            let info = format.describe();
-
-            if self.min_usages.contains(TextureUsages::STORAGE_BINDING)
-                && !info
-                    .guaranteed_format_features
-                    .allowed_usages
-                    .contains(TextureUsages::STORAGE_BINDING)
-            {
-                return Some(TextureError::FormatNotStorageCompatible(name.into()));
-            }
-
-            if self.min_usages.contains(TextureUsages::RENDER_ATTACHMENT)
-                && !info
-                    .guaranteed_format_features
-                    .allowed_usages
-                    .contains(TextureUsages::RENDER_ATTACHMENT)
-            {
-                return Some(TextureError::FormatNotRenderCompatible(name.into()));
-            }
-
-            match self.min_sample_count {
-                1 => {}
-                2 if info
-                    .guaranteed_format_features
-                    .flags
-                    .contains(TextureFormatFeatureFlags::MULTISAMPLE_X2) => {}
-                4 if info
-                    .guaranteed_format_features
-                    .flags
-                    .contains(TextureFormatFeatureFlags::MULTISAMPLE_X4) => {}
-                8 if info
-                    .guaranteed_format_features
-                    .flags
-                    .contains(TextureFormatFeatureFlags::MULTISAMPLE_X8) => {}
-                _ => return Some(TextureError::FormatNotMultisampleCompatible(name.into())),
-            }
-
-            if self.has_depth {
-                match format {
-                    TextureFormat::Depth16Unorm
-                    | TextureFormat::Depth24Plus
-                    | TextureFormat::Depth24PlusStencil8
-                    | TextureFormat::Depth32Float
-                    | TextureFormat::Depth32FloatStencil8 => (),
-                    _ => return Some(TextureError::FormatNotDepth(name.into(), format)),
-                }
-            }
-
-            match self.sample_type {
-                TextureSampleTypeConstraint::Unconstrained => (),
-                TextureSampleTypeConstraint::Conflicted(left, right) => {
-                    return Some(TextureError::ConflictingTextureSampleTypes(
-                        name.into(),
-                        left,
-                        right,
-                    ))
-                }
-                TextureSampleTypeConstraint::Constrained(sample_type) => {
-                    match (info.sample_type, sample_type) {
-                        (wgpu::TextureSampleType::Depth, TextureSampleType::Depth)
-                        | (
-                            wgpu::TextureSampleType::Depth,
-                            TextureSampleType::Float { filterable: false },
-                        )
-                        | (
-                            wgpu::TextureSampleType::Float { filterable: true },
-                            TextureSampleType::Float { .. },
-                        )
-                        | (
-                            wgpu::TextureSampleType::Float { filterable: false },
-                            TextureSampleType::Float { filterable: false },
-                        )
-                        | (wgpu::TextureSampleType::Sint, TextureSampleType::Sint)
-                        | (wgpu::TextureSampleType::Uint, TextureSampleType::Uint) => (),
-                        _ => {
-                            return Some(TextureError::FormatNotSampleTypeCompatible(
-                                name.into(),
-                                format,
-                                sample_type,
-                            ))
-                        }
-                    }
-                }
-            }
-
-            if self.has_stencil {
-                match format {
-                    TextureFormat::Depth24PlusStencil8 | TextureFormat::Depth32FloatStencil8 => (),
-                    _ => return Some(TextureError::FormatNotStencil(name.into(), format)),
-                }
-            }
-        }
-
-        None
-    }
-
-    pub fn verify_retained(&self, tex: &Texture, name: &str) -> Option<TextureError> {
-        if let Some(size) = self.size {
-            if tex.size != size {
-                return Some(TextureError::SizeMismatch(name.into(), size, tex.size));
-            }
-        }
-
-        if let Some(format) = self.format {
-            if tex.format != format {
-                return Some(TextureError::FormatMismatch(
-                    name.into(),
-                    format,
-                    tex.format,
-                ));
-            }
-        }
-
-        if !tex.usage.contains(self.min_usages) {
-            return Some(TextureError::MissingUsages(
-                name.into(),
-                self.min_usages.difference(tex.usage),
-            ));
-        }
-        if tex.mip_level_count < self.min_mip_level_count {
-            return Some(TextureError::InsufficientMipLevels(
-                name.into(),
-                self.min_mip_level_count,
-                tex.mip_level_count,
-            ));
-        }
-        if tex.sample_count < self.min_sample_count {
-            return Some(TextureError::InsufficientSamples(
-                name.into(),
-                self.min_sample_count,
-                tex.sample_count,
-            ));
-        }
-        None
-    }
-
-    pub fn set_min_size(&mut self, size: Extent3d) {
-        self.min_size.width = self.min_size.width.max(size.width);
-        self.min_size.height = self.min_size.height.max(size.height);
-        self.min_size.depth_or_array_layers = self
-            .min_size
-            .depth_or_array_layers
-            .max(size.depth_or_array_layers);
-    }
-
-    pub fn set_format(&mut self, format: TextureFormat) {
-        if let Some(old_format) = self.format {
-            assert_eq!(old_format, format, "conflicting texture formats detected; texture constrained or bound with formats {old_format:?} and {format:?}");
-        } else {
-            self.format = Some(format);
-        }
-    }
-
-    pub fn set_mip_count(&mut self, count: u32) {
-        self.min_mip_level_count = self.min_mip_level_count.max(count);
-    }
-
-    pub fn set_multisampled(&mut self) {
-        self.multisampled = true;
-    }
-
-    pub fn set_texture_binding(&mut self) {
-        self.min_usages |= TextureUsages::TEXTURE_BINDING;
-    }
-
-    pub fn set_storage_binding(&mut self) {
-        self.min_usages |= TextureUsages::STORAGE_BINDING;
-    }
-
-    pub fn set_render_attachment(&mut self) {
-        self.min_usages |= TextureUsages::RENDER_ATTACHMENT;
-    }
-
-    pub fn set_copy_src(&mut self) {
-        self.min_usages |= TextureUsages::COPY_SRC;
-    }
-
-    pub fn set_copy_dst(&mut self) {
-        self.min_usages |= TextureUsages::COPY_DST;
-    }
-
-    pub fn set_sample_type(&mut self, ty: TextureSampleType) {
-        match self.sample_type {
-            TextureSampleTypeConstraint::Unconstrained => {
-                self.sample_type = TextureSampleTypeConstraint::Constrained(ty)
-            }
-            TextureSampleTypeConstraint::Conflicted(_, _) => (),
-            TextureSampleTypeConstraint::Constrained(old_ty) => match (old_ty, ty) {
-                // Upgrade
-                (
-                    TextureSampleType::Float { filterable: false },
-                    TextureSampleType::Float { filterable: true } | TextureSampleType::Depth,
-                ) => self.sample_type = TextureSampleTypeConstraint::Constrained(ty),
-                // Compatible
-                (
-                    TextureSampleType::Float { filterable: true },
-                    TextureSampleType::Float { .. },
-                )
-                | (
-                    TextureSampleType::Float { filterable: false },
-                    TextureSampleType::Float { filterable: false },
-                )
-                | (TextureSampleType::Depth, TextureSampleType::Depth)
-                | (TextureSampleType::Depth, TextureSampleType::Float { filterable: false })
-                | (TextureSampleType::Sint, TextureSampleType::Sint)
-                | (TextureSampleType::Uint, TextureSampleType::Uint) => (),
-                // Incompatible
-                _ => self.sample_type = TextureSampleTypeConstraint::Conflicted(old_ty, ty),
-            },
-        }
-    }
-}
-
-impl Default for TextureConstraints {
-    fn default() -> Self {
-        Self {
-            size: None,
-            min_size: Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            format: None,
-            has_depth: false,
-            has_stencil: false,
-            min_mip_level_count: 1,
-            min_sample_count: 1,
-            min_usages: TextureUsages::empty(),
-            multisampled: false,
-            sample_type: TextureSampleTypeConstraint::Unconstrained,
-        }
-    }
 }

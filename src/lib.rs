@@ -1,21 +1,18 @@
 mod bitset;
 mod commands;
 mod context;
-mod graph;
 mod named_slotmap;
-mod node;
 mod resources;
 mod spirv_iter;
 mod util;
 
 pub use commands::RenderCommands;
 pub use context::{BufferBuilder, RenderContext};
-pub use graph::{RenderGraph, RenderGraphCompilation, RenderGraphError};
-pub use node::{FunctionNode, RenderNodeMeta};
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 pub use resources::{
-    compute_pipeline_from_module, module_from_source, ModuleError, PipelineError, PipelineStorage,
-    RWMode, ReflectedComputePipeline, RenderResources, ShaderSource, Texture, TextureSize,
+    compute_pipeline_from_module, module_from_source, ComputePipeline, ModuleError, PipelineError,
+    Pipelines, RWMode, ReflectedComputePipeline, RenderResources, ShaderSource, Texture,
+    TextureSize,
 };
 pub use wgpu::{
     Backends, Extent3d, Features, ImageDataLayout, Limits, MaintainBase, MapMode, Origin3d,

@@ -33,13 +33,13 @@ pub(crate) type BindGroupLayouts = SlotMap<BindGroupLayoutHandle, BindGroupLayou
 pub(crate) type PipelineLayouts = SlotMap<PipelineLayoutHandle, PipelineLayout>;
 
 #[derive(Debug)]
-pub struct PipelineStorage {
+pub struct Pipelines {
     pub(crate) compute_pipelines: ComputePipelines,
     pub(crate) bind_group_layouts: BindGroupLayouts,
     pub(crate) pipeline_layouts: PipelineLayouts,
 }
 
-impl PipelineStorage {
+impl Pipelines {
     pub fn new() -> Self {
         Self {
             compute_pipelines: NamedSlotMap::new(),
@@ -82,7 +82,7 @@ impl PipelineStorage {
     }
 }
 
-impl Default for PipelineStorage {
+impl Default for Pipelines {
     fn default() -> Self {
         Self::new()
     }
@@ -106,6 +106,7 @@ pub enum PipelineError {
 pub struct ReflectedComputePipeline {
     pub pipeline: wgpu::ComputePipeline,
     pub layout: wgpu::PipelineLayout,
+    // TODO: See if a sorted array of (u32, BindGroupLayoutEntry) is faster
     pub group_layouts: Vec<(
         wgpu::BindGroupLayout,
         FastHashMap<u32, BindGroupLayoutEntry>,
@@ -172,7 +173,7 @@ pub fn compute_pipeline_from_module(
         }
 
         let ty = module.module.types.get_handle(resource.ty).unwrap();
-        let size = ty.inner.size(&module.module.constants);
+        let size = ty.inner.size(module.module.to_ctx());
 
         let binding_ty = match resource.space {
             AddressSpace::Uniform => BindingType::Buffer {
@@ -250,13 +251,13 @@ pub fn compute_pipeline_from_module(
         .collect();
 
     // TODO: This is an unnecessary allocation that can hopefully be fixed later
-    let borrows: Vec<_> = layouts.iter().map(|(group, _)| group).collect();
+    let bind_group_layouts: Vec<_> = layouts.iter().map(|(group, _)| group).collect();
 
     let layout = ctx
         .device
         .create_pipeline_layout(&PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &borrows[..],
+            bind_group_layouts: &bind_group_layouts[..],
             push_constant_ranges: &[],
         });
 

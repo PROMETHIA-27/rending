@@ -42,18 +42,8 @@ fn main() {
     .unwrap();
     let context = instance.create_render_context();
 
-    let mut graph = RenderGraph::new();
-    graph.add(FunctionNode::new(
-        "compute_levels",
-        compute_levels(vec_resolution),
-    ));
-    graph.add(
-        FunctionNode::new("copy_to_staging", copy_to_staging(output_resolution))
-            .after("compute_levels"),
-    );
-
-    let mut pipelines = PipelineStorage::new();
-    let compute_levels = context
+    let mut pipelines = Pipelines::new();
+    let compute_levels_pipeline = context
         .compute_pipeline(
             Some("compute_levels"),
             ShaderSource::wgsl_file_path("assets/shaders/image_to_ascii.wgsl"),
@@ -61,18 +51,15 @@ fn main() {
             &HashSet::default(),
         )
         .unwrap();
-    pipelines.insert_compute_pipeline("compute_levels_pipeline", compute_levels);
-
-    let mut compiled = graph.compile(&pipelines, None).unwrap();
+    pipelines.insert_compute_pipeline("compute_levels_pipeline", compute_levels_pipeline);
 
     let mut resources = RenderResources::new();
 
     let ascii = context
-        .buffer()
-        .size(size_of::<[UVec4; 16]>() as u64)
+        .buffer(size_of::<[UVec4; 16]>() as u64)
         .copy_dst()
         .uniform()
-        .create();
+        .finish();
     let ascii_data: Vec<u8> = include_str!("../assets/text/levels.txt")
         .chars()
         .filter(|&c| c != '\n')
@@ -87,7 +74,7 @@ fn main() {
     resources.insert_buffer("ascii_table", ascii);
 
     let input = context.texture(
-        Some("dog"),
+        Some("input image"),
         TextureSize::D2 {
             x: resolution.x,
             y: resolution.y,
@@ -119,14 +106,18 @@ fn main() {
     resources.insert_texture("input", input);
 
     let staging = context
-        .buffer()
-        .size((output_resolution.x * output_resolution.y) as u64)
+        .buffer((output_resolution.x * output_resolution.y) as u64)
         .copy_dst()
         .map_read()
-        .create();
+        .finish();
     resources.insert_buffer("staging", staging);
 
-    compiled.run(context, &resources).unwrap();
+    let mut commands = RenderCommands::new(&pipelines);
+
+    compute_levels(&mut commands, vec_resolution);
+    copy_to_staging(&mut commands, output_resolution);
+
+    commands.
 
     let staging = resources.get_buffer("staging").unwrap();
     let slice = staging.slice(..);
@@ -149,40 +140,36 @@ fn main() {
     println!("Image conversion success!");
 }
 
-fn compute_levels(vec_resolution: UVec2) -> impl Fn(&mut RenderCommands) {
-    move |commands| {
-        let ascii = commands.buffer("ascii_table");
-        let input = commands.texture("input");
-        let output = commands.buffer("output");
-        let pipeline = commands.compute_pipeline("compute_levels_pipeline");
+fn compute_levels(commands: &mut RenderCommands, vec_resolution: UVec2) {
+    let ascii = commands.buffer("ascii_table");
+    let input = commands.texture("input");
+    let output = commands.buffer("output");
+    let pipeline = commands.compute_pipeline("compute_levels_pipeline");
 
-        commands
-            .compute_pass(Some("compute_levels"))
-            .bind_group(
-                0,
-                [
-                    (0, ascii.slice(..).uniform()),
-                    (1, input.view().create()),
-                    (2, output.slice(..).infer()),
-                ],
-            )
-            .pipeline(pipeline)
-            .dispatch(vec_resolution.x, vec_resolution.y, 1);
-    }
+    commands
+        .compute_pass(Some("compute_levels"))
+        .bind_group(
+            0,
+            [
+                (0, ascii.slice(..).uniform()),
+                (1, input.view().create()),
+                (2, output.slice(..).storage(RWMode::READWRITE)),
+            ],
+        )
+        .pipeline(pipeline)
+        .dispatch(vec_resolution.x, vec_resolution.y, 1);
 }
 
-fn copy_to_staging(output_resolution: UVec2) -> impl Fn(&mut RenderCommands) {
-    move |commands| {
-        let buffer = commands.buffer("output");
-        let staging = commands.buffer("staging");
-        commands.copy_buffer_to_buffer(
-            buffer,
-            0,
-            staging,
-            0,
-            (output_resolution.x * output_resolution.y) as u64,
-        );
-    }
+fn copy_to_staging(commands: &mut RenderCommands, output_resolution: UVec2) {
+    let buffer = commands.buffer("output");
+    let staging = commands.buffer("staging");
+    commands.copy_buffer_to_buffer(
+        buffer,
+        0,
+        staging,
+        0,
+        (output_resolution.x * output_resolution.y) as u64,
+    );
 }
 
 /* Helpers because stdlib has a bunch of unstable goodies that I can't use >:( */

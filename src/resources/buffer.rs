@@ -87,26 +87,6 @@ impl BufferSlice {
             usage: BufferUse::Storage(mode),
         }
     }
-
-    /// Turn a buffer slice into a usable resource binding to pass to functions like
-    /// [`ComputePassCommands::bind_group()`](crate::commands::ComputePassCommands).
-    /// This will infer what kind of binding the buffer will be. This inference will *always*
-    /// succeed, however this makes it less clear from a glance what kind of operations are being
-    /// done to the buffer, and you must still get the input/output declaration correct.
-    /// For this reason it is recommended to use `uniform()`, `storage()`, etc. instead.
-    pub fn infer(self) -> ResourceBinding {
-        let Self {
-            handle,
-            offset,
-            size,
-        } = self;
-        ResourceBinding::Buffer {
-            handle,
-            offset,
-            size,
-            usage: BufferUse::Infer,
-        }
-    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -152,54 +132,4 @@ pub enum BufferError {
         "the retained buffer `{0}` is used with usages `{1:?}` but was not created with those flags"
     )]
     MissingUsages(String, BufferUsages),
-}
-
-#[derive(Debug)]
-pub(crate) struct BufferConstraints {
-    pub min_size: u64,
-    pub min_usages: BufferUsages,
-}
-
-impl BufferConstraints {
-    pub fn verify_retained(&self, buffer: &Buffer, name: &str) -> Option<BufferError> {
-        if buffer.size() < self.min_size {
-            return Some(BufferError::TooSmall(
-                name.into(),
-                buffer.size(),
-                self.min_size,
-            ));
-        }
-        if !buffer.usage().contains(self.min_usages) {
-            return Some(BufferError::MissingUsages(
-                name.into(),
-                self.min_usages.difference(buffer.usage()),
-            ));
-        }
-        None
-    }
-
-    pub fn set_size(&mut self, size: u64) {
-        self.min_size = self.min_size.max(size);
-    }
-
-    pub fn set_usages(&mut self, usage: BufferUsages) {
-        self.min_usages |= usage;
-    }
-
-    pub fn set_uniform(&mut self) {
-        self.min_usages |= BufferUsages::UNIFORM;
-    }
-
-    pub fn set_storage(&mut self) {
-        self.min_usages |= BufferUsages::STORAGE;
-    }
-}
-
-impl Default for BufferConstraints {
-    fn default() -> Self {
-        Self {
-            min_size: 0,
-            min_usages: BufferUsages::empty(),
-        }
-    }
 }

@@ -73,8 +73,9 @@ pub fn module_from_source<I: SpirvIterator, P: AsRef<Path>>(
 ) -> Result<ShaderModule, ModuleError> {
     let (module, info) = match source {
         ShaderSource::Spirv(spirv) => {
-            let module = naga::front::spv::Parser::new(spirv.into_spirv(), &SpvOptions::default())
-                .parse()?;
+            let module =
+                naga::front::spv::Frontend::new(spirv.into_spirv(), &SpvOptions::default())
+                    .parse()?;
             let info = naga::valid::Validator::new(ValidationFlags::all(), Capabilities::all())
                 .validate(&module)
                 .map_err(|err| {
@@ -88,8 +89,9 @@ pub fn module_from_source<I: SpirvIterator, P: AsRef<Path>>(
         }
         ShaderSource::FilePath(path) => {
             let bytes = std::fs::read(path)?;
-            let module = naga::front::spv::Parser::new(bytes.into_spirv(), &SpvOptions::default())
-                .parse()?;
+            let module =
+                naga::front::spv::Frontend::new(bytes.into_spirv(), &SpvOptions::default())
+                    .parse()?;
             let info = naga::valid::Validator::new(ValidationFlags::all(), Capabilities::all())
                 .validate(&module)
                 .map_err(|err| {
