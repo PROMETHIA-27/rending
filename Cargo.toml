@@ -6,36 +6,21 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-arrayvec = "0.7.2"
-bitflags = "1.3.2"
-futures-lite = "1.12"
-slotmap = "1.0"
-thiserror = "1.0"
-wgpu-core = "0.17"
-fixed = "1.21.0"
-raw-window-handle = { version = "0.5.0", default-features = false }
-encase = { version = "0.4.1", default-features = false }
+rending_reflect = { version = "0.1.0", path = "crates/rending_reflect", optional = true }
+rending_builder = { version = "0.1.0", path = "crates/rending_builder", optional = true }
 
-[dev-dependencies.encase]
-version = "0.6.1"
-features = ["glam"]
-
-[dependencies.naga]
-version = "0.13"
-features = ["spv-in"]
-
-[dependencies.smallvec]
-version = "1.10"
-features = ["union", "const_generics"]
-
-[dependencies.wgpu]
-version = "0.17"
-features = ["spirv"]
+[features]
+default = []
+builder = ["rending_builder"]
+reflect = ["rending_reflect"]
+glsl = ["rending_reflect/glsl"]
 
 [dev-dependencies]
 bytemuck = "1.13.0"
-glam = { version = "0.22.0", features = ["bytemuck"] }
+futures-lite = "1.13.0"
+glam = { version = "0.24.1", features = ["bytemuck"] }
 image = { version = "0.24", default-features = false, features = ["jpeg"] }
+wgpu = "0.17.0"
 
 [workspace]
-members = ["crates/rending_reflect"]
+members = ["crates/rending_reflect", "crates/rending_builder"]

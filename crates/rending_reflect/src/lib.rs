@@ -14,17 +14,6 @@ use wgpu::{
     ShaderSource, ShaderStages, StorageTextureAccess, TextureFormat,
 };
 
-pub mod tex_ext;
-
-pub use tex_ext::*;
-
-pub mod prelude {
-    pub use super::{
-        tex_ext::{TextureBindingExt, TextureViewExt},
-        ReflectedComputePipeline,
-    };
-}
-
 #[derive(Debug)]
 pub struct ReflectedComputePipeline {
     pub pipeline: wgpu::ComputePipeline,

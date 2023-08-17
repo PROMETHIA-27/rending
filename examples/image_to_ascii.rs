@@ -1,14 +1,17 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::mem::size_of;
-use std::num::NonZeroU32;
 
-use encase::{StorageBuffer, UniformBuffer};
 use glam::{uvec2, UVec2, UVec4};
 use image::EncodableLayout;
-use rending::*;
-use wgpu::{ImageCopyTexture, TextureAspect, TextureUsages};
+use rending::prelude::*;
+use wgpu::{
+    Backends, BindGroup, Buffer, CommandEncoder, CommandEncoderDescriptor, ComputePassDescriptor,
+    ComputePipeline, DeviceDescriptor, Extent3d, Features, ImageCopyTexture, ImageDataLayout,
+    InstanceDescriptor, Limits, MaintainBase, MapMode, Origin3d, PowerPreference,
+    RequestAdapterOptions, ShaderSource, TextureAspect, TextureDimension, TextureFormat,
+};
 
-#[allow(clippy::read_zero_byte_vec)]
 fn main() {
     let image_name = std::env::args().nth(1).expect("Must provide an image name");
     let mut path = std::path::PathBuf::new();
@@ -31,35 +34,42 @@ fn main() {
         vec_resolution.y,
     );
 
-    let instance = GPUInstance::new_headless(
-        Backends::PRIMARY,
-        PowerPreference::HighPerformance,
+    let instance = wgpu::Instance::new(InstanceDescriptor {
+        backends: Backends::all(),
+        dx12_shader_compiler: wgpu::Dx12Compiler::Fxc,
+    });
+
+    let adapter =
+        futures_lite::future::block_on(instance.request_adapter(&RequestAdapterOptions {
+            force_fallback_adapter: false,
+            compatible_surface: None,
+            power_preference: PowerPreference::HighPerformance,
+        }))
+        .unwrap();
+
+    let (device, queue) = futures_lite::future::block_on(adapter.request_device(
+        &DeviceDescriptor {
+            features: Features::empty(),
+            limits: Limits::downlevel_defaults(),
+            label: None,
+        },
         None,
-        Features::default(),
-        Limits::default(),
-        false,
+    ))
+    .unwrap();
+
+    let start = std::time::Instant::now();
+
+    let pipeline = ReflectedComputePipeline::new(
+        &device,
+        ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+            "../assets/shaders/image_to_ascii.wgsl"
+        ))),
+        "main",
+        &HashSet::default(),
+        Some("compute_levels"),
     )
     .unwrap();
-    let context = instance.create_render_context();
 
-    let mut pipelines = Pipelines::new();
-    let compute_levels_pipeline = context
-        .compute_pipeline(
-            Some("compute_levels"),
-            ShaderSource::wgsl_file_path("assets/shaders/image_to_ascii.wgsl"),
-            "main",
-            &HashSet::default(),
-        )
-        .unwrap();
-    pipelines.insert_compute_pipeline("compute_levels_pipeline", compute_levels_pipeline);
-
-    let mut resources = RenderResources::new();
-
-    let ascii = context
-        .buffer(size_of::<[UVec4; 16]>() as u64)
-        .copy_dst()
-        .uniform()
-        .finish();
     let ascii_data: Vec<u8> = include_str!("../assets/text/levels.txt")
         .chars()
         .filter(|&c| c != '\n')
@@ -67,26 +77,32 @@ fn main() {
         .map(u8::try_from)
         .map(Result::unwrap)
         .collect();
-    let ascii_data: [UVec4; 256 / (4 * 4)] = bytemuck::cast_slice(&ascii_data).try_into().unwrap();
-    let mut ascii_uniform = UniformBuffer::new(vec![]);
-    ascii_uniform.write(&ascii_data).unwrap();
-    context.write_buffer(&ascii, &ascii_uniform);
-    resources.insert_buffer("ascii_table", ascii);
 
-    let input = context.texture(
-        Some("input image"),
-        TextureSize::D2 {
-            x: resolution.x,
-            y: resolution.y,
-        },
-        TextureFormat::Rgba8Unorm,
-        TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-        1,
-        1,
-    );
-    context.queue.write_texture(
+    let ascii_table = device
+        .buffer()
+        .mapped()
+        .data(&ascii_data)
+        .uniform()
+        .copy_dst()
+        .finish();
+
+    let input = device
+        .texture()
+        .label("input image")
+        .size(Extent3d {
+            width: resolution.x,
+            height: resolution.y,
+            depth_or_array_layers: 1,
+        })
+        .dimension(TextureDimension::D2)
+        .format(TextureFormat::Rgba8Unorm)
+        .texture_binding()
+        .copy_dst()
+        .finish();
+
+    queue.write_texture(
         ImageCopyTexture {
-            texture: &input.inner,
+            texture: &input,
             mip_level: 0,
             origin: Origin3d::default(),
             aspect: TextureAspect::default(),
@@ -94,7 +110,7 @@ fn main() {
         img.into_rgba8().as_bytes(),
         ImageDataLayout {
             offset: 0,
-            bytes_per_row: Some(NonZeroU32::new(4 * resolution.x).unwrap()),
+            bytes_per_row: Some(4 * resolution.x),
             rows_per_image: None,
         },
         Extent3d {
@@ -103,28 +119,57 @@ fn main() {
             depth_or_array_layers: 1,
         },
     );
-    resources.insert_texture("input", input);
 
-    let staging = context
-        .buffer((output_resolution.x * output_resolution.y) as u64)
+    let staging_size = (output_resolution.x * output_resolution.y) as u64;
+
+    let staging = device
+        .buffer()
+        .size(staging_size)
         .copy_dst()
         .map_read()
         .finish();
-    resources.insert_buffer("staging", staging);
 
-    let mut commands = RenderCommands::new(&pipelines);
+    let output = device
+        .buffer()
+        .label("output")
+        .size(staging_size)
+        .storage()
+        .copy_src()
+        .finish();
 
-    compute_levels(&mut commands, vec_resolution);
-    copy_to_staging(&mut commands, output_resolution);
+    let mut commands = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
 
-    commands.
+    let bindgroup = pipeline
+        .bind_group(
+            &device,
+            None,
+            0,
+            [
+                (0, ascii_table.as_entire_binding()),
+                (1, input.as_entire().binding()),
+                (2, output.as_entire_binding()),
+            ],
+        )
+        .unwrap();
 
-    let staging = resources.get_buffer("staging").unwrap();
+    let exe_start = std::time::Instant::now();
+
+    compute_levels(&mut commands, vec_resolution, pipeline.pipeline, bindgroup);
+    copy_to_staging(&mut commands, output_resolution, &output, &staging);
+
+    let commands = commands.finish();
+    queue.submit([commands]);
+
+    let exe = std::time::Instant::now()
+        .duration_since(exe_start)
+        .as_micros();
+
     let slice = staging.slice(..);
-    let buffer = context.read_map_buffer(&slice);
-    let output = StorageBuffer::new(&buffer[..]);
-    let mut out: Vec<UVec4> = vec![];
-    output.read(&mut out).unwrap();
+    slice.map_async(MapMode::Read, |_| ());
+    device.poll(MaintainBase::Wait);
+    let buffer = slice.get_mapped_range();
+    let out: &[UVec4] = bytemuck::cast_slice(&buffer);
+
     let mut bytes = vec![];
     for y in 0..output_resolution.y {
         bytes.extend_from_slice(
@@ -135,36 +180,35 @@ fn main() {
         bytes.push(b'\n');
     }
 
-    std::fs::write("assets/text/output.txt", bytes).unwrap();
+    std::fs::write("../../assets/text/output.txt", bytes).unwrap();
 
-    println!("Image conversion success!");
+    let duration = std::time::Instant::now().duration_since(start).as_micros();
+
+    println!(
+        "Image conversion success! Took {duration}us total after init, and {exe}us to execute"
+    );
 }
 
-fn compute_levels(commands: &mut RenderCommands, vec_resolution: UVec2) {
-    let ascii = commands.buffer("ascii_table");
-    let input = commands.texture("input");
-    let output = commands.buffer("output");
-    let pipeline = commands.compute_pipeline("compute_levels_pipeline");
-
-    commands
-        .compute_pass(Some("compute_levels"))
-        .bind_group(
-            0,
-            [
-                (0, ascii.slice(..).uniform()),
-                (1, input.view().create()),
-                (2, output.slice(..).storage(RWMode::READWRITE)),
-            ],
-        )
-        .pipeline(pipeline)
-        .dispatch(vec_resolution.x, vec_resolution.y, 1);
+fn compute_levels(
+    commands: &mut CommandEncoder,
+    vec_resolution: UVec2,
+    pipeline: ComputePipeline,
+    bindgroup: BindGroup,
+) {
+    let mut pass = commands.begin_compute_pass(&ComputePassDescriptor { label: None });
+    pass.set_pipeline(&pipeline);
+    pass.set_bind_group(0, &bindgroup, &[]);
+    pass.dispatch_workgroups(vec_resolution.x, vec_resolution.y, 1);
 }
 
-fn copy_to_staging(commands: &mut RenderCommands, output_resolution: UVec2) {
-    let buffer = commands.buffer("output");
-    let staging = commands.buffer("staging");
+fn copy_to_staging(
+    commands: &mut CommandEncoder,
+    output_resolution: UVec2,
+    output: &Buffer,
+    staging: &Buffer,
+) {
     commands.copy_buffer_to_buffer(
-        buffer,
+        output,
         0,
         staging,
         0,

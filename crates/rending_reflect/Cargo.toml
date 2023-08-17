@@ -6,7 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-futures = "0.3.28"
 naga = { version = "0.13.0", features = ["spv-in"] }
 quickerr = "0.1.1"
 wgpu = { version = "0.17.0", features = ["spirv"] }
@@ -14,9 +13,3 @@ wgpu = { version = "0.17.0", features = ["spirv"] }
 [features]
 default = []
 glsl = ["wgpu/glsl"]
-
-[dev-dependencies]
-bytemuck = "1.13.1"
-encase = { version = "0.6.1", features = ["glam"] }
-glam = { version = "0.24.1", features = ["bytemuck"] }
-image = "0.24.7"
