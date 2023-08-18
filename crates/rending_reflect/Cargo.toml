@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 naga = { version = "0.13.0", features = ["spv-in"] }
-quickerr = "0.1.1"
+quickerr = "0.3.2"
 wgpu = { version = "0.17.0", features = ["spirv"] }
 
 [features]

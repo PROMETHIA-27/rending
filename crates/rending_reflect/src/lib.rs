@@ -1,139 +1,127 @@
+#![deny(
+    missing_docs,
+    rustdoc::broken_intra_doc_links,
+    rustdoc::private_intra_doc_links
+)]
+#![warn(rustdoc::all)]
+#![doc = include_str!("../README.md")]
+
 use std::borrow::Cow;
 use std::num::NonZeroU64;
 
 use naga::valid::{Capabilities, ValidationFlags};
 use naga::{
-    AddressSpace, FastHashMap, FastHashSet, GlobalVariable, Handle, ImageClass, ImageDimension,
-    ResourceBinding, ShaderStage, StorageAccess, StorageFormat, TypeInner, WithSpan,
+    AddressSpace, FastHashSet, GlobalVariable, Handle, ImageClass, ImageDimension, ResourceBinding,
+    ShaderStage, StorageAccess, StorageFormat, TypeInner, WithSpan,
 };
-use quickerr::quickerr;
+use quickerr::error;
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, BufferBindingType,
-    ComputePipelineDescriptor, Device, Label, PipelineLayoutDescriptor, ShaderModuleDescriptor,
-    ShaderSource, ShaderStages, StorageTextureAccess, TextureFormat,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
+    BindGroupLayoutEntry, BindingResource, BindingType, BufferBindingType, ComputePipeline,
+    ComputePipelineDescriptor, Device, Label, PipelineLayout, PipelineLayoutDescriptor,
+    RenderPipeline, ShaderModuleDescriptor, ShaderSource, ShaderStages, StorageTextureAccess,
+    TextureFormat,
 };
 
+// TODO: Reflect everything in a module
+// TODO: Allow choosing an override/neither with a FastHashMap<ResourceBinding, Option<String>>
+/// A reflected compute pipeline. It contains a [`wgpu::ComputePipeline`], [`wgpu::PipelineLayout`],
+/// and a collection representing the bind group layouts and their entries of the pipeline layout.
+///
+/// It can be created with the [`ReflectedComputePipeline::new()`] method, and bind groups can be
+/// created off of it using the [`ReflectedComputePipeline::bind_group()`] and
+/// [`ReflectedComputePipeline::bind_groups()`] methods.
 #[derive(Debug)]
 pub struct ReflectedComputePipeline {
-    pub pipeline: wgpu::ComputePipeline,
-    pub layout: wgpu::PipelineLayout,
-    // TODO: See if a sorted array of (u32, BindGroupLayoutEntry) is faster
-    pub group_layouts: Vec<(
-        wgpu::BindGroupLayout,
-        FastHashMap<u32, BindGroupLayoutEntry>,
-    )>,
+    /// The compute pipeline itself.
+    pub pipeline: ComputePipeline,
+    /// The PipelineLayout of [`pipeline`].
+    pub layout: PipelineLayout,
+    /// The bind group layouts of [`layout`] and their corresponding entries.
+    pub group_layouts: Vec<(BindGroupLayout, Vec<(u32, BindGroupLayoutEntry)>)>,
 }
 
 type SpirvError = naga::front::spv::Error;
+
 type WgslError = naga::front::wgsl::ParseError;
-#[cfg(feature = "glsl")]
-#[derive(Debug)]
-pub struct GlslError(Vec<naga::front::glsl::Error>);
-#[cfg(feature = "glsl")]
-impl std::error::Error for GlslError {}
-#[cfg(feature = "glsl")]
-impl std::fmt::Display for GlslError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("errors in glsl shader:\n")?;
-        for err in &self.0 {
-            f.write_fmt(format_args!("{err}"))?;
-            f.write_str("\n")?;
-        }
-        Ok(())
-    }
+
+error! {
+    #[cfg(feature = "glsl")]
+    /// The error that occurs when invalid glsl code is fed to a reflected pipeline new function.
+    pub GlslError
+    "errors in glsl shader"
+    [naga::front::glsl::Error]
 }
+
 type ValidationError = WithSpan<naga::valid::ValidationError>;
 
-quickerr! {
-    # pub MissingEntryPoint
+error! {
+    /// The error that occurs when the given entry point could not be found in a module.
+    pub MissingEntryPoint
     "module is missing entry point `{point}`"
-    - point: String
+    point: String
 }
 
-quickerr! {
-    # pub WrongShaderType
+error! {
+    /// The error that occurs when the entry point is not of the correct type.
+    pub WrongShaderType
     "module expected shader type `{ty}` but got shader type `{got}`"
-    - ty: &'static str
-    - got: String
+    ty: &'static str,
+    got: String,
 }
 
-quickerr! {
-    # pub BindGroupTooHigh
+error! {
+    /// The error that occurs when a bind group index exceeds [`wgpu_core::MAX_BIND_GROUPS`].
+    pub BindGroupTooHigh
     "binding index `{index}` is greater than `MAX_BIND_GROUPS`"
-    - index: u32
+    index: u32
 }
 
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum ReflectError {
-    SpirvError(SpirvError),
-    WgslError(WgslError),
+error! {
+    /// The error that occurs when an attempt to reflect a pipeline from a module fails.
+    pub ReflectError
+    "failed to reflect pipeline"
+    /// An error occurred while converting SPIR-V bytecode to a module.
+    SpirvError,
+    /// An error occurred while converting WGSL code to a module.
+    WgslError,
+    /// An error occurred while converting GLSL code to a module.
     #[cfg(feature = "glsl")]
-    GlslError(GlslError),
-    ValidationError(ValidationError),
-    MissingEntryPoint(MissingEntryPoint),
-    WrongShaderType(WrongShaderType),
-    BindGroupTooHigh(BindGroupTooHigh),
-}
-impl ::std::fmt::Display for ReflectError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("failed to reflect pipeline")
-    }
-}
-impl ::std::error::Error for ReflectError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(match self {
-            ReflectError::SpirvError(err) => err,
-            ReflectError::WgslError(err) => err,
-            #[cfg(feature = "glsl")]
-            ReflectError::GlslError(err) => err,
-            ReflectError::ValidationError(err) => err,
-            ReflectError::MissingEntryPoint(err) => err,
-            ReflectError::WrongShaderType(err) => err,
-            ReflectError::BindGroupTooHigh(err) => err,
-        })
-    }
-}
-impl ::std::convert::From<SpirvError> for ReflectError {
-    fn from(source: SpirvError) -> Self {
-        Self::SpirvError(source)
-    }
-}
-impl ::std::convert::From<WgslError> for ReflectError {
-    fn from(source: WgslError) -> Self {
-        Self::WgslError(source)
-    }
-}
-#[cfg(feature = "glsl")]
-impl ::std::convert::From<GlslError> for ReflectError {
-    fn from(source: GlslError) -> Self {
-        Self::GlslError(source)
-    }
-}
-impl ::std::convert::From<ValidationError> for ReflectError {
-    fn from(source: ValidationError) -> Self {
-        Self::ValidationError(source)
-    }
-}
-impl ::std::convert::From<MissingEntryPoint> for ReflectError {
-    fn from(source: MissingEntryPoint) -> Self {
-        Self::MissingEntryPoint(source)
-    }
-}
-impl ::std::convert::From<WrongShaderType> for ReflectError {
-    fn from(source: WrongShaderType) -> Self {
-        Self::WrongShaderType(source)
-    }
-}
-impl ::std::convert::From<BindGroupTooHigh> for ReflectError {
-    fn from(source: BindGroupTooHigh) -> Self {
-        Self::BindGroupTooHigh(source)
-    }
+    GlslError,
+    /// An error occurred while validating the module.
+    ValidationError,
+    /// The module did not have the requested entry point.
+    MissingEntryPoint,
+    /// The entry point was not of the requested type.
+    WrongShaderType,
+    /// A bind group index exceeded MAX_BIND_GROUPS.
+    BindGroupTooHigh,
 }
 
 impl ReflectedComputePipeline {
     // TODO: Investigate a way to explicitly reuse superset pipelinelayouts
+    /// Reflect a module to produce a pipeline with its layout and bind groups automatically
+    /// generated from the module.
+    ///
+    /// [`BindGroup`]s are how WGPU groups resources that are passed into [pipelines](wgpu::RenderPipeline)
+    /// when they're invoked.
+    /// A single bind group is atomic, and is created ahead of time. But a pipeline can have multiple
+    /// bind group slots, and replace an entire bind group easily. A bind group can contain multiple
+    /// resources. These resources can be [`Texture`](wgpu::Texture)s, [`Buffer`](wgpu::Buffer)s,
+    /// [`Sampler`](wgpu::Sampler)s, etc. 
+    /// 
+    /// A pipeline has a given
+    /// [`PipelineLayout`] which is a set of [`BindGroupLayout`]s. A bind group can only be bound to a
+    /// slot in a pipeline if it shares a bind group layout with that slot in the pipeline layout
+    /// of the pipeline it's being bound to. This crate's purpose is to automatically generate
+    /// the bind group layouts and pipeline layout of a pipeline from a given shader module. 
+    /// 
+    /// A shader
+    /// module is a piece of shader code that can contain some resource bindings, functions, and entry points
+    /// for shaders, as well as a few other things. 
+    /// Thus, a single module can contain multiple shaders, of different types.
+    /// A [`RenderPipeline`] will correspond to two shaders, one vertex and one fragment,
+    /// while a [`ComputePipeline`] will correspond to one shader, a compute shader.
     pub fn new(
         device: &Device,
         source: ShaderSource,
@@ -284,10 +272,7 @@ impl ReflectedComputePipeline {
             .rev()
             .find_map(|(idx, group)| (!group.is_empty()).then_some(idx));
 
-        let layouts: Vec<(
-            wgpu::BindGroupLayout,
-            FastHashMap<u32, BindGroupLayoutEntry>,
-        )> = groups
+        let layouts: Vec<(BindGroupLayout, Vec<(u32, BindGroupLayoutEntry)>)> = groups
             .into_iter()
             .take(last_active_group.map(|i| i + 1).unwrap_or(0))
             .map(|entries| {
@@ -333,6 +318,7 @@ impl ReflectedComputePipeline {
         })
     }
 
+    /// Construct a bind group using the given layout of this pipeline.
     pub fn bind_group<'a>(
         &self,
         device: &Device,
@@ -351,6 +337,7 @@ impl ReflectedComputePipeline {
         }))
     }
 
+    /// Construct all bind groups of this pipeline.
     pub fn bind_groups<
         'a,
         'l,

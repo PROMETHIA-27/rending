@@ -1,8 +1,12 @@
+//! This module includes the [`SamplerExt`] extension which allows creation of samplers with a [`Device`]
+//! via the builder pattern.
+
 use wgpu::{
     AddressMode, CompareFunction, Device, FilterMode, Label, Sampler, SamplerBorderColor,
     SamplerDescriptor,
 };
 
+///
 pub trait SamplerExt {
     fn sampler(&self) -> SamplerBuilder;
 }

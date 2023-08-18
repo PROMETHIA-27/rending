@@ -40,8 +40,8 @@ fn main(
         for (var j = 0u; j < 4u; j++) {
             let tex_coords = base_coords + vec2((4u * i) + j, 0u);
 
-            let l0 = lightness(textureLoad(input, tex_coords, 0));
-            let l1 = lightness(textureLoad(input, tex_coords + vec2(0u, 1u), 0));
+            let l0 = lightness(textureLoad(input, vec2<i32>(tex_coords), 0));
+            let l1 = lightness(textureLoad(input, vec2<i32>(tex_coords + vec2(0u, 1u)), 0));
             let l = u32(((l0 + l1) / 2.0) * 255.0);
 
             let ascii_arr_index = l / 16u;
