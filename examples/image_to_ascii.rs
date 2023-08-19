@@ -154,7 +154,12 @@ fn main() {
 
     let exe_start = std::time::Instant::now();
 
-    compute_levels(&mut commands, vec_resolution, pipeline.pipeline, bindgroup);
+    compute_levels(
+        &mut commands,
+        vec_resolution,
+        pipeline.pipeline(),
+        bindgroup,
+    );
     copy_to_staging(&mut commands, output_resolution, &output, &staging);
 
     let commands = commands.finish();
@@ -180,7 +185,7 @@ fn main() {
         bytes.push(b'\n');
     }
 
-    std::fs::write("../../assets/text/output.txt", bytes).unwrap();
+    std::fs::write("assets/text/output.txt", bytes).unwrap();
 
     let duration = std::time::Instant::now().duration_since(start).as_micros();
 
@@ -192,11 +197,11 @@ fn main() {
 fn compute_levels(
     commands: &mut CommandEncoder,
     vec_resolution: UVec2,
-    pipeline: ComputePipeline,
+    pipeline: &ComputePipeline,
     bindgroup: BindGroup,
 ) {
     let mut pass = commands.begin_compute_pass(&ComputePassDescriptor { label: None });
-    pass.set_pipeline(&pipeline);
+    pass.set_pipeline(pipeline);
     pass.set_bind_group(0, &bindgroup, &[]);
     pass.dispatch_workgroups(vec_resolution.x, vec_resolution.y, 1);
 }

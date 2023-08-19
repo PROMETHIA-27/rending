@@ -10,7 +10,7 @@ rending_reflect = { version = "0.1.0", path = "crates/rending_reflect", optional
 rending_builder = { version = "0.1.0", path = "crates/rending_builder", optional = true }
 
 [features]
-default = []
+default = ["builder", "reflect"]
 builder = ["rending_builder"]
 reflect = ["rending_reflect"]
 glsl = ["rending_reflect/glsl"]

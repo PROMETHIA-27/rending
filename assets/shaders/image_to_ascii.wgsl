@@ -47,9 +47,11 @@ fn main(
             let ascii_arr_index = l / 16u;
             let ascii_ints_index = (l % 16u) / 4u;
             let ascii_chars_index = l % 4u;
-            let char = unpack4x8unorm(
-                ascii_table[ascii_arr_index][ascii_ints_index]
-            )[ascii_chars_index];
+            // let char = unpack4x8unorm(
+            //     ascii_table[ascii_arr_index][ascii_ints_index]
+            // )[ascii_chars_index];
+
+            let char = 1.0;
 
             out_chars[j] = char;
         }
