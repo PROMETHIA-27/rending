@@ -33,12 +33,10 @@ use wgpu::{
 /// [`ReflectedComputePipeline::bind_groups()`] methods.
 #[derive(Debug)]
 pub struct ReflectedComputePipeline {
-    /// The compute pipeline itself.
-    pub pipeline: ComputePipeline,
-    /// The PipelineLayout of [`pipeline`].
-    pub layout: PipelineLayout,
-    /// The bind group layouts of [`layout`] and their corresponding entries.
-    pub group_layouts: Vec<(BindGroupLayout, Vec<(u32, BindGroupLayoutEntry)>)>,
+    pipeline: ComputePipeline,
+    layout: PipelineLayout,
+    group_layouts: Vec<BindGroupLayout>,
+    group_entries: Vec<Vec<(u32, BindGroupLayoutEntry)>>,
 }
 
 type SpirvError = naga::front::spv::Error;
@@ -108,17 +106,17 @@ impl ReflectedComputePipeline {
     /// A single bind group is atomic, and is created ahead of time. But a pipeline can have multiple
     /// bind group slots, and replace an entire bind group easily. A bind group can contain multiple
     /// resources. These resources can be [`Texture`](wgpu::Texture)s, [`Buffer`](wgpu::Buffer)s,
-    /// [`Sampler`](wgpu::Sampler)s, etc. 
-    /// 
+    /// [`Sampler`](wgpu::Sampler)s, etc.
+    ///
     /// A pipeline has a given
     /// [`PipelineLayout`] which is a set of [`BindGroupLayout`]s. A bind group can only be bound to a
     /// slot in a pipeline if it shares a bind group layout with that slot in the pipeline layout
     /// of the pipeline it's being bound to. This crate's purpose is to automatically generate
-    /// the bind group layouts and pipeline layout of a pipeline from a given shader module. 
-    /// 
+    /// the bind group layouts and pipeline layout of a pipeline from a given shader module.
+    ///
     /// A shader
     /// module is a piece of shader code that can contain some resource bindings, functions, and entry points
-    /// for shaders, as well as a few other things. 
+    /// for shaders, as well as a few other things.
     /// Thus, a single module can contain multiple shaders, of different types.
     /// A [`RenderPipeline`] will correspond to two shaders, one vertex and one fragment,
     /// while a [`ComputePipeline`] will correspond to one shader, a compute shader.
@@ -174,16 +172,10 @@ impl ReflectedComputePipeline {
 
         let point_info = info.get_entry_point(point_index);
 
-        let globals: FastHashSet<_> = module
+        let resources = module
             .global_variables
             .iter()
-            .filter_map(|(handle, _)| (!point_info[handle].is_empty()).then_some(handle))
-            .collect();
-
-        let resources = globals.iter().filter_map(|handle| {
-            let global = module.global_variables.try_get(*handle).unwrap();
-            (global.binding.is_some()).then_some((handle, global))
-        });
+            .filter(|(_, global)| global.binding.is_some());
 
         let filtered: FastHashSet<Handle<GlobalVariable>> = point_info
             .sampling_set
@@ -239,7 +231,7 @@ impl ReflectedComputePipeline {
                         dim,
                         arrayed,
                         class,
-                    } => match_image(dim, arrayed, class, filtered.contains(handle)),
+                    } => match_image(dim, arrayed, class, filtered.contains(&handle)),
                     TypeInner::Sampler { comparison } => BindingType::Sampler(match comparison {
                         true => wgpu::SamplerBindingType::Comparison,
                         false => {
@@ -272,7 +264,10 @@ impl ReflectedComputePipeline {
             .rev()
             .find_map(|(idx, group)| (!group.is_empty()).then_some(idx));
 
-        let layouts: Vec<(BindGroupLayout, Vec<(u32, BindGroupLayoutEntry)>)> = groups
+        let (group_layouts, group_entries): (
+            Vec<BindGroupLayout>,
+            Vec<Vec<(u32, BindGroupLayoutEntry)>>,
+        ) = groups
             .into_iter()
             .take(last_active_group.map(|i| i + 1).unwrap_or(0))
             .map(|entries| {
@@ -288,14 +283,13 @@ impl ReflectedComputePipeline {
 
                 (group, entries)
             })
-            .collect();
+            .unzip();
 
-        // TODO: This is an unnecessary allocation that can hopefully be fixed later
-        let bind_group_layouts: Vec<_> = layouts.iter().map(|(group, _)| group).collect();
+        let bind_group_layouts = &group_layouts.iter().collect::<Vec<_>>()[..];
 
         let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &bind_group_layouts[..],
+            bind_group_layouts,
             push_constant_ranges: &[],
         });
 
@@ -314,7 +308,8 @@ impl ReflectedComputePipeline {
         Ok(ReflectedComputePipeline {
             pipeline,
             layout,
-            group_layouts: layouts,
+            group_layouts,
+            group_entries,
         })
     }
 
@@ -332,7 +327,7 @@ impl ReflectedComputePipeline {
             .collect();
         Some(device.create_bind_group(&BindGroupDescriptor {
             label,
-            layout: &self.group_layouts.get(group)?.0,
+            layout: self.group_layouts.get(group)?,
             entries: &entries[..],
         }))
     }
@@ -354,6 +349,26 @@ impl ReflectedComputePipeline {
                 Some((index, self.bind_group(device, label, index, group)?))
             })
             .collect::<Option<Vec<_>>>()
+    }
+
+    /// The compute pipeline itself.
+    pub fn pipeline(&self) -> &ComputePipeline {
+        &self.pipeline
+    }
+
+    /// The PipelineLayout of [`pipeline()`].
+    pub fn layout(&self) -> &PipelineLayout {
+        &self.layout
+    }
+
+    /// The bind group layouts of [`layout()`].
+    pub fn group_layouts(&self) -> &[BindGroupLayout] {
+        self.group_layouts.as_ref()
+    }
+
+    /// The entries corresponding to each bind group layout in [`group_layouts()`].
+    pub fn group_entries(&self) -> &[Vec<(u32, BindGroupLayoutEntry)>] {
+        self.group_entries.as_ref()
     }
 }
 
